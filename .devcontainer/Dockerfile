@@ -1,0 +1,32 @@
+ARG PHP_VERSION
+
+FROM mcr.microsoft.com/devcontainers/php:1-${PHP_VERSION}
+
+RUN mkdir -p /usr/share/keyrings && \
+    curl -fsSL https://dl.yarnpkg.com/debian/pubkey.gpg \
+      | gpg --dearmor -o /usr/share/keyrings/yarn.gpg && \
+    echo "deb [signed-by=/usr/share/keyrings/yarn.gpg] https://dl.yarnpkg.com/debian stable main" \
+      > /etc/apt/sources.list.d/yarn.list
+
+RUN apt-get update && export DEBIAN_FRONTEND=noninteractive && \
+    apt-get install -y libffi-dev libuv1-dev && \
+    docker-php-ext-install pcntl && \
+    pecl install channel://pecl.php.net/uv-0.3.0 && \
+    docker-php-ext-enable uv && \
+    apt-get clean -y && rm -rf /var/lib/apt/lists/*
+
+RUN cp /usr/local/etc/php/php.ini-production /usr/local/etc/php/php.ini && \
+    sed -i -e "s/^ *memory_limit.*/memory_limit = 512M/g" /usr/local/etc/php/php.ini && \
+    if [ -f /usr/local/etc/php/conf.d/xdebug.ini ]; then \
+        sed -i \
+            -e "s/^xdebug.mode.*/xdebug.mode = off/" \
+            -e "s/^xdebug.start_with_request.*/xdebug.start_with_request = trigger/" \
+            /usr/local/etc/php/conf.d/xdebug.ini; \
+    fi
+
+# [Optional] Uncomment this section to install additional OS packages.
+# RUN apt-get update && export DEBIAN_FRONTEND=noninteractive \
+#     && apt-get -y install --no-install-recommends <your-package-list-here>
+
+# [Optional] Uncomment this line to install global node packages.
+# RUN su vscode -c "source /usr/local/share/nvm/nvm.sh && npm install -g <your-package-here>" 2>&1
