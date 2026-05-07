@@ -136,11 +136,36 @@ The [`examples`](examples) directory contains small standalone scripts for commo
 * `keyboard-interactive.php` - authenticate with keyboard-interactive prompts
 * `public-key-authentication.php` - authenticate with a private key from disk
 * `host-key-verification.php` - verify a server fingerprint before continuing
+* `test-server.php` - launch a local SSH server for exercising the client examples
 
 Each example can be run directly with:
 
 ```bash
 php examples/<file>.php
+```
+
+You can launch a matching SSH test server from this repository:
+
+```bash
+php examples/test-server.php
+```
+
+This example relies on the dev dependency `williameggers/reactphp-ssh-server`.
+
+With the test server running, these examples work against its default configuration:
+
+```bash
+php examples/quickstart.php
+php examples/exec.php
+php examples/shell.php
+php examples/keyboard-interactive.php
+```
+
+To enable `public-key-authentication.php`, start the server with an OpenSSH-format public key:
+
+```bash
+SSH_AUTHORIZED_KEY="$(cat /path/to/id_ed25519.pub)" php examples/test-server.php
+SSH_PRIVATE_KEY=/path/to/id_ed25519 php examples/public-key-authentication.php
 ```
 
 ## Client usage
