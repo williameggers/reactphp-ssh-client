@@ -94,6 +94,24 @@ final readonly class Client
     }
 
     /**
+     * Request remote TCP forwarding on the server.
+     *
+     * @return PromiseInterface<int>
+     */
+    public function forwardIn(string $bindAddress, int $bindPort): PromiseInterface
+    {
+        return $this->connection->forwardIn($bindAddress, $bindPort);
+    }
+
+    /**
+     * Register an event listener on the underlying SSH connection.
+     */
+    public function on(string $event, callable $listener): void
+    {
+        $this->connection->on($event, $listener);
+    }
+
+    /**
      * Close the underlying SSH connection and any active channels.
      */
     public function close(): void

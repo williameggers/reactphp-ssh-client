@@ -136,6 +136,7 @@ fwrite(STDOUT, 'Password: ' . $password . "\n");
 fwrite(STDOUT, 'Keyboard-interactive response: ' . $keyboardResponse . "\n");
 fwrite(STDOUT, 'Host key path: ' . $hostKeyPath . "\n");
 fwrite(STDOUT, 'forwardOut target: ' . $httpTargetAddress . "\n");
+fwrite(STDOUT, "forwardIn support: not available in the current example server dependency\n");
 
 if ('' === $authorizedKey) {
     fwrite(STDOUT, "Public key auth: disabled (set SSH_AUTHORIZED_KEY to enable it)\n");
@@ -148,6 +149,7 @@ fwrite(STDOUT, "Client example commands:\n");
 fwrite(STDOUT, sprintf("  php examples/quickstart.php\n"));
 fwrite(STDOUT, sprintf("  php examples/exec.php\n"));
 fwrite(STDOUT, sprintf("  php examples/shell.php\n"));
+fwrite(STDOUT, sprintf("  php examples/forward-in.php  # requires server-side tcpip-forward support\n"));
 fwrite(STDOUT, sprintf("  php examples/forward-out.php\n"));
 fwrite(STDOUT, sprintf("  php examples/forward-out-pipe.php\n"));
 fwrite(STDOUT, sprintf("  php examples/keyboard-interactive.php\n"));

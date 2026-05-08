@@ -31,10 +31,11 @@ abstract class AbstractChannel implements ChannelInterface
         private readonly int $remoteChannel,
         int $initialWindow,
         private readonly int $maxPacketSize,
+        ?int $remoteInitialWindow = null,
     ) {
         $this->stream = new Stream\ThroughStream();
         $this->localWindow = $initialWindow;
-        $this->remoteWindow = $initialWindow;
+        $this->remoteWindow = $remoteInitialWindow ?? $initialWindow;
 
         Util::forwardEvents($this->stream, $this, ['data', 'end', 'error', 'close', 'pipe', 'drain']);
     }

@@ -24,6 +24,7 @@ Additional variables used by specific examples:
 - `SSH_HOST_FINGERPRINT` expected `SHA256:...` host key fingerprint
 - `SSH_TERM`, `SSH_ROWS`, `SSH_COLS` for shell sessions
 - `SSH_ENV_GREETING`, `SSH_ENV_TARGET` for `exec.php`
+- `SSH_FORWARD_BIND_IP`, `SSH_FORWARD_BIND_PORT` for `forward-in.php`
 - `SSH_FORWARD_SRC_IP`, `SSH_FORWARD_SRC_PORT`, `SSH_FORWARD_DST_IP`, `SSH_FORWARD_DST_PORT` for `forward-out.php` and `forward-out-pipe.php`
 
 ## Files
@@ -35,6 +36,7 @@ Additional variables used by specific examples:
 - `keyboard-interactive.php`: Authenticate with keyboard-interactive prompts.
 - `public-key-authentication.php`: Authenticate with a private key from disk.
 - `host-key-verification.php`: Verify the server host key fingerprint before continuing.
+- `forward-in.php`: Request remote TCP forwarding with `forwardIn()` and accept inbound `tcp connection` events.
 - `forward-out.php`: Open a `direct-tcpip` stream and send a raw HTTP request through it.
 - `forward-out-pipe.php`: Pipe a request stream into `forwardOut()` and pipe the response to `STDOUT`.
 

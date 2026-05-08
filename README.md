@@ -3,7 +3,7 @@
 [![Latest Stable Version](http://poser.pugx.org/williameggers/reactphp-ssh-client/v)](https://packagist.org/packages/williameggers/reactphp-ssh-client)
 [![License](http://poser.pugx.org/williameggers/reactphp-ssh-client/license)](https://packagist.org/packages/williameggers/reactphp-ssh-client)
 
-This project is an event-driven, standalone SSH client implementation for [ReactPHP](https://reactphp.org/) developed by William Eggers. It provides a small asynchronous API for connecting to SSH servers, authenticating, opening shell sessions, and executing remote commands.
+This project is an event-driven, standalone SSH client implementation for [ReactPHP](https://reactphp.org/) developed by William Eggers. It provides a small asynchronous API for connecting to SSH servers, authenticating, opening shell sessions, executing remote commands, and forwarding TCP connections with `forwardOut()` and `forwardIn()`.
 
 > Looking for an SSH server too? Check out [williameggers/reactphp-ssh-server](https://github.com/williameggers/reactphp-ssh-server) or [WhispPHP/whisp](https://github.com/WhispPHP/whisp).
 
@@ -15,7 +15,7 @@ This project is an event-driven, standalone SSH client implementation for [React
 
 * Supports password, public key, and keyboard-interactive authentication flows
 
-* Provides simple APIs for running remote commands and opening interactive shell sessions
+* Provides simple APIs for running remote commands, opening interactive shell sessions, opening outbound TCP streams with `forwardOut()`, and requesting remote TCP forwarding with `forwardIn()`
 
 * Exposes host key information during connection setup so applications can enforce their own trust policy
 
@@ -135,6 +135,7 @@ The [`examples`](examples) directory contains small standalone scripts for commo
 * `quickstart-with-logging.php` - same flow with inline PSR-3 logging output
 * `exec.php` - run a command with environment variables and stream stdout/stderr
 * `shell.php` - open an interactive shell session
+* `forward-in.php` - request remote TCP forwarding and accept inbound `forwarded-tcpip` channels
 * `forward-out.php` - open a direct-tcpip stream and send a raw HTTP request
 * `forward-out-pipe.php` - pipe a request stream through a direct-tcpip channel
 * `keyboard-interactive.php` - authenticate with keyboard-interactive prompts
@@ -250,7 +251,11 @@ It provides the following methods:
 
 * **shell(?ShellConfig $config = null): PromiseInterface<Shell>**
 
+* **forwardIn(string $bindAddress, int $bindPort): PromiseInterface<int>**
+
 * **forwardOut(string $srcIP, int $srcPort, string $dstIP, int $dstPort): PromiseInterface<DirectTcpipChannel>**
+
+* **on(string $event, callable $listener): void**
 
 * **close(): void**
 
@@ -298,6 +303,30 @@ $client->forwardOut('127.0.0.1', 8000, '127.0.0.1', 80)->then(
     }
 );
 ```
+
+Use `forwardIn()` to ask the SSH server to listen on a remote address and port and emit inbound TCP connections back to the client. The promise resolves with the effective listening port, which is useful when requesting port `0` for an automatically assigned port:
+
+```php
+use WilliamEggers\React\SSHClient\Channel\ForwardedTcpipChannel;
+
+$client->on('tcp connection', function (array $info, Closure $accept, Closure $reject): void {
+    /** @var ForwardedTcpipChannel $stream */
+    $stream = $accept();
+    $stream->end("HTTP/1.1 404 Not Found\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
+});
+
+$client->forwardIn('127.0.0.1', 8000)->then(static function (int $listeningPort): void {
+    fwrite(STDOUT, 'Listening on remote port ' . $listeningPort . PHP_EOL);
+});
+```
+
+The `tcp connection` event receives:
+
+* `array $info` with `destIP`, `destPort`, `srcIP`, and `srcPort`
+
+* `Closure $accept` to accept the forwarded connection and return a `ForwardedTcpipChannel`
+
+* `Closure $reject` to reject the forwarded connection
 
 ### Process
 
@@ -530,11 +559,11 @@ The following compression algorithms are supported:
 
 ## Unsupported features
 
-This SSH client implementation is intentionally scoped to support core SSH connection management, authentication, exec requests, and shell sessions. The following features are not currently supported:
+This SSH client implementation is intentionally scoped to support core SSH connection management, authentication, exec requests, shell sessions, outbound TCP forwarding with `forwardOut()`, and remote TCP forwarding with `forwardIn()`. The following features are not currently supported:
 
 * **SFTP and SCP** - file transfer protocols and helpers are not implemented
 
-* **Port forwarding beyond `forwardOut()`** - local, remote, and dynamic forwarding are not supported
+* **Additional forwarding modes** - dynamic forwarding, UNIX socket forwarding, and higher-level local forwarding helpers are not implemented
 
 * **Agent forwarding** - SSH agent forwarding is not implemented
 

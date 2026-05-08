@@ -18,6 +18,7 @@ use WilliamEggers\React\SSHClient\Authentication\PasswordAuthentication;
 use WilliamEggers\React\SSHClient\Authentication\PublicKeyAuthentication;
 use WilliamEggers\React\SSHClient\Channel\ChannelInterface;
 use WilliamEggers\React\SSHClient\Channel\DirectTcpipChannel;
+use WilliamEggers\React\SSHClient\Channel\ForwardedTcpipChannel;
 use WilliamEggers\React\SSHClient\Channel\SessionChannel;
 use WilliamEggers\React\SSHClient\Concerns\WritesLogs;
 use WilliamEggers\React\SSHClient\Enums\MessageType;
@@ -57,6 +58,9 @@ final class Connection
 
     /** @var array<int, string> */
     private array $pendingChannelTypes = [];
+
+    /** @var list<array{type: string, bindPort: int, deferred: Deferred<int>}> */
+    private array $pendingGlobalRequests = [];
 
     /** @var null|Deferred<Client> */
     private ?Deferred $handshakeDeferred = null;
@@ -327,6 +331,30 @@ final class Connection
     }
 
     /**
+     * @return PromiseInterface<int>
+     */
+    public function forwardIn(string $bindAddress, int $bindPort): PromiseInterface
+    {
+        self::assertPort($bindPort, 'Bind');
+
+        /** @var Deferred<int> $deferred */
+        $deferred = new Deferred();
+        $this->pendingGlobalRequests[] = [
+            'type' => 'tcpip-forward',
+            'bindPort' => $bindPort,
+            'deferred' => $deferred,
+        ];
+
+        $this->debug('Requesting SSH remote TCP forwarding', [
+            'bind_address' => $bindAddress,
+            'bind_port' => $bindPort,
+        ]);
+        $this->writePacked(MessageType::GLOBAL_REQUEST, ['tcpip-forward', true, $bindAddress, $bindPort]);
+
+        return $deferred->promise();
+    }
+
+    /**
      * @param list<mixed> $values
      *
      * @return PromiseInterface<bool>
@@ -460,6 +488,9 @@ final class Connection
             MessageType::USERAUTH_FAILURE => $this->handleUserAuthFailure($packet),
             MessageType::USERAUTH_SUCCESS => $this->handleUserAuthSuccess(),
             MessageType::USERAUTH_PK_OK => $this->handleUserAuthMessage60($packet),
+            MessageType::REQUEST_SUCCESS => $this->handleRequestSuccess($packet),
+            MessageType::REQUEST_FAILURE => $this->handleRequestFailure(),
+            MessageType::CHANNEL_OPEN => $this->handleChannelOpen($packet),
             MessageType::CHANNEL_OPEN_CONFIRMATION => $this->handleChannelOpenConfirmation($packet),
             MessageType::CHANNEL_OPEN_FAILURE => $this->handleChannelOpenFailure($packet),
             MessageType::CHANNEL_SUCCESS => $this->handleChannelReply($packet, true),
@@ -691,6 +722,73 @@ final class Connection
         $deferred?->resolve($channel);
     }
 
+    private function handleChannelOpen(Packet $packet): void
+    {
+        [$channelType, $remoteChannel, $initialWindow, $maxPacketSize] = $packet->extractFormat('%s%u%u%u');
+        if (!is_string($channelType) || !is_int($remoteChannel) || !is_int($initialWindow) || !is_int($maxPacketSize)) {
+            throw new ProtocolException('Invalid channel open payload');
+        }
+
+        if ('forwarded-tcpip' !== $channelType) {
+            $this->warning('Rejecting unsupported SSH channel open request', [
+                'type' => $channelType,
+                'remote_channel' => $remoteChannel,
+            ]);
+            $this->writePacked(MessageType::CHANNEL_OPEN_FAILURE, [$remoteChannel, 3, 'Unsupported channel type: ' . $channelType, '']);
+
+            return;
+        }
+
+        [$destIp, $destPort, $srcIp, $srcPort] = $packet->extractFormat('%s%u%s%u');
+        if (!is_string($destIp) || !is_int($destPort) || !is_string($srcIp) || !is_int($srcPort)) {
+            throw new ProtocolException('Invalid forwarded-tcpip channel open payload');
+        }
+
+        $handled = false;
+        $accept = function () use (&$handled, $remoteChannel, $initialWindow, $maxPacketSize): ForwardedTcpipChannel {
+            if ($handled) {
+                throw new \RuntimeException('Forwarded TCP connection has already been handled');
+            }
+
+            $handled = true;
+            $localChannel = $this->nextChannelId++;
+            $localInitialWindow = 1024 * 1024;
+            $localMaxPacketSize = 32768;
+            $channel = new ForwardedTcpipChannel($this, $localChannel, $remoteChannel, $localInitialWindow, $maxPacketSize, $initialWindow);
+
+            $this->channels[$localChannel] = $channel;
+            $this->info('Accepted SSH forwarded-tcpip channel', [
+                'local_channel' => $localChannel,
+                'remote_channel' => $remoteChannel,
+            ]);
+            $this->writePacked(MessageType::CHANNEL_OPEN_CONFIRMATION, [$remoteChannel, $localChannel, $localInitialWindow, $localMaxPacketSize]);
+
+            return $channel;
+        };
+        $reject = function () use (&$handled, $remoteChannel): void {
+            if ($handled) {
+                return;
+            }
+
+            $handled = true;
+            $this->info('Rejected SSH forwarded-tcpip channel', [
+                'remote_channel' => $remoteChannel,
+            ]);
+            $this->writePacked(MessageType::CHANNEL_OPEN_FAILURE, [$remoteChannel, 1, 'Forwarded TCP connection rejected', '']);
+        };
+
+        $this->emit('tcp connection', [[
+            'destIP' => $destIp,
+            'destPort' => $destPort,
+            'srcIP' => $srcIp,
+            'srcPort' => $srcPort,
+        ], $accept, $reject]);
+
+        if (!$handled) {
+            $reject();
+        }
+    }
+
     private function handleChannelOpenFailure(Packet $packet): void
     {
         [$localChannel, $reasonCode, $description] = $packet->extractFormat('%u%u%s%s');
@@ -728,6 +826,44 @@ final class Connection
             'success' => $success,
         ]);
         $deferred?->resolve($success);
+    }
+
+    private function handleRequestSuccess(Packet $packet): void
+    {
+        $request = array_shift($this->pendingGlobalRequests);
+        if (!is_array($request)) {
+            throw new ProtocolException('Unexpected global request success reply');
+        }
+
+        $port = $request['bindPort'];
+        if ('tcpip-forward' === $request['type'] && 0 === $port) {
+            [$allocatedPort] = $packet->extractFormat('%u');
+            if (!is_int($allocatedPort)) {
+                throw new ProtocolException('Invalid tcpip-forward success payload');
+            }
+
+            $port = $allocatedPort;
+        }
+
+        $this->debug('SSH global request succeeded', [
+            'type' => $request['type'],
+            'port' => $port,
+        ]);
+        $request['deferred']->resolve($port);
+    }
+
+    private function handleRequestFailure(): void
+    {
+        $request = array_shift($this->pendingGlobalRequests);
+        if (!is_array($request)) {
+            throw new ProtocolException('Unexpected global request failure reply');
+        }
+
+        $this->warning('SSH global request failed', [
+            'type' => $request['type'],
+            'bind_port' => $request['bindPort'],
+        ]);
+        $request['deferred']->reject(new \RuntimeException('SSH global request failed: ' . $request['type']));
     }
 
     private function handleChannelWindowAdjust(Packet $packet): void
