@@ -1,7 +1,10 @@
 <?php declare(strict_types=1);
 
 use React\EventLoop\Loop;
+use React\Promise\Deferred;
+use React\Promise\PromiseInterface;
 use React\Socket\ConnectionInterface;
+use React\Socket\ConnectorInterface as SocketConnectorInterface;
 use React\Socket\TcpServer;
 use WilliamEggers\React\SSHClient\Authentication\PasswordAuthentication;
 use WilliamEggers\React\SSHClient\Client;
@@ -98,4 +101,57 @@ test('connect allows disabling the full SSH timeout', function (): void {
     Loop::run();
 
     expect($stillPending)->toBeTrue();
+});
+
+test('connect uses injected socket connector for TCP dial step', function (): void {
+    $address = null;
+    TestSshServer::shellEchoServer()->then(static function (string $resolvedAddress) use (&$address): void {
+        $address = $resolvedAddress;
+    });
+
+    Loop::futureTick(function () use (&$address): void {
+        if (!is_string($address)) {
+            return;
+        }
+
+        $socketConnector = new class implements SocketConnectorInterface {
+            public ?string $connectedUri = null;
+
+            public function connect($uri): PromiseInterface
+            {
+                $this->connectedUri = $uri;
+
+                /** @var Deferred<ConnectionInterface> $deferred */
+                $deferred = new Deferred();
+
+                Loop::addTimer(0.001, function () use ($uri, $deferred): void {
+                    (new React\Socket\Connector())->connect($uri)->then(
+                        static function (ConnectionInterface $connection) use ($deferred): void {
+                            $deferred->resolve($connection);
+                        },
+                        static function (Throwable $throwable) use ($deferred): void {
+                            $deferred->reject($throwable);
+                        }
+                    );
+                });
+
+                return $deferred->promise();
+            }
+        };
+
+        $connector = new Connector(socketConnector: $socketConnector);
+        $connector->connect(
+            $address,
+            new PasswordAuthentication('user', 'secret'),
+            new CallbackHostKeyVerifier(static fn (): bool => true),
+        )->then(function (Client $client) use ($socketConnector, $address): void {
+            expect($client)->toBeInstanceOf(Client::class);
+            expect($socketConnector->connectedUri)->toBe($address);
+            Loop::stop();
+        }, function (Throwable $throwable): void {
+            throw $throwable;
+        });
+    });
+
+    Loop::run();
 });

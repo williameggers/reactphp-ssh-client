@@ -5,11 +5,13 @@ namespace WilliamEggers\React\SSHClient;
 use Evenement\EventEmitterTrait;
 use Psr\Log\LoggerInterface;
 use React\EventLoop\Loop;
+use React\EventLoop\LoopInterface;
 use React\EventLoop\TimerInterface;
 use React\Promise\Deferred;
 use React\Promise\PromiseInterface;
 use React\Socket\ConnectionInterface;
 use React\Socket\Connector as SocketConnector;
+use React\Socket\ConnectorInterface as SocketConnectorInterface;
 use WilliamEggers\React\SSHClient\Authentication\AuthenticationInterface;
 use WilliamEggers\React\SSHClient\Authentication\KeyboardInteractiveAuthentication;
 use WilliamEggers\React\SSHClient\Authentication\PasswordAuthentication;
@@ -47,7 +49,7 @@ final class Connection
     /** @var array<int, Deferred<bool>> */
     private array $channelReplies = [];
 
-    /** @var Deferred<Client>|null */
+    /** @var null|Deferred<Client> */
     private ?Deferred $handshakeDeferred = null;
     private ?AuthenticationInterface $authentication = null;
     private ?HostKeyVerifierInterface $hostKeyVerifier = null;
@@ -85,13 +87,16 @@ final class Connection
         HostKeyVerifierInterface $hostKeyVerifier,
         ?LoggerInterface $logger = null,
         ?float $timeout = 30.0,
+        ?SocketConnectorInterface $socketConnector = null,
     ): PromiseInterface {
-        /** @var ConnectionInterface|null $socketConnection */
+        /** @var null|ConnectionInterface $socketConnection */
         $socketConnection = null;
-        /** @var PromiseInterface<ConnectionInterface>|null $socketPromise */
+
+        /** @var null|PromiseInterface<ConnectionInterface> $socketPromise */
         $socketPromise = null;
         $loop = Loop::get();
         $timer = null;
+
         /** @var Deferred<Client> $deferred */
         $deferred = new Deferred(static function () use (&$socketConnection, &$socketPromise, $loop, &$timer): void {
             self::cancelConnectTimeoutTimer($loop, $timer);
@@ -103,7 +108,7 @@ final class Connection
             }
         });
         $timer = self::createConnectTimeoutTimer($uri, $timeout, $deferred, $loop, $socketConnection, $socketPromise);
-        $connector = new SocketConnector(loop: $loop);
+        $connector = $socketConnector ?? new SocketConnector(loop: $loop);
         $socketPromise = $connector->connect($uri);
         $socketPromise->then(
             function (ConnectionInterface $connection) use ($authentication, $hostKeyVerifier, $deferred, $logger, $loop, &$timer, &$socketConnection): void {
@@ -133,55 +138,13 @@ final class Connection
     }
 
     /**
-     * @param Deferred<Client> $deferred
-     * @param PromiseInterface<ConnectionInterface>|null $socketPromise
-     */
-    private static function createConnectTimeoutTimer(
-        string $uri,
-        ?float $timeout,
-        Deferred $deferred,
-        \React\EventLoop\LoopInterface $loop,
-        ?ConnectionInterface &$socketConnection,
-        ?PromiseInterface &$socketPromise,
-    ): ?TimerInterface {
-        if (null === $timeout) {
-            return null;
-        }
-
-        return $loop->addTimer($timeout, static function () use ($uri, $timeout, $deferred, &$socketConnection, &$socketPromise): void {
-            $socketConnection?->close();
-
-            if (null !== $socketPromise) {
-                $socketPromise->cancel();
-            }
-
-            $deferred->reject(new \RuntimeException(sprintf('SSH connection to %s timed out after %s seconds', $uri, self::formatTimeout($timeout))));
-        });
-    }
-
-    private static function cancelConnectTimeoutTimer(\React\EventLoop\LoopInterface $loop, ?TimerInterface $timer): void
-    {
-        if (!$timer instanceof TimerInterface) {
-            return;
-        }
-
-        $loop->cancelTimer($timer);
-    }
-
-    private static function formatTimeout(float $timeout): string
-    {
-        $formatted = number_format($timeout, 3, '.', '');
-
-        return rtrim(rtrim($formatted, '0'), '.');
-    }
-
-    /**
      * @return PromiseInterface<Client>
      */
     public function start(AuthenticationInterface $authentication, HostKeyVerifierInterface $hostKeyVerifier): PromiseInterface
     {
         $this->authentication = $authentication;
         $this->hostKeyVerifier = $hostKeyVerifier;
+
         /** @var Deferred<Client> $handshakeDeferred */
         $handshakeDeferred = new Deferred();
         $this->handshakeDeferred = $handshakeDeferred;
@@ -246,6 +209,7 @@ final class Connection
 
     /**
      * @param list<mixed> $values
+     *
      * @return PromiseInterface<bool>
      */
     public function sendChannelRequest(SessionChannel $channel, string $request, bool $wantReply, array $values = []): PromiseInterface
@@ -265,6 +229,49 @@ final class Connection
         ], ...$values]);
 
         return $deferred->promise();
+    }
+
+    /**
+     * @param Deferred<Client>                           $deferred
+     * @param null|PromiseInterface<ConnectionInterface> $socketPromise
+     */
+    private static function createConnectTimeoutTimer(
+        string $uri,
+        ?float $timeout,
+        Deferred $deferred,
+        LoopInterface $loop,
+        ?ConnectionInterface &$socketConnection,
+        ?PromiseInterface &$socketPromise,
+    ): ?TimerInterface {
+        if (null === $timeout) {
+            return null;
+        }
+
+        return $loop->addTimer($timeout, static function () use ($uri, $timeout, $deferred, &$socketConnection, &$socketPromise): void {
+            $socketConnection?->close();
+
+            if (null !== $socketPromise) {
+                $socketPromise->cancel();
+            }
+
+            $deferred->reject(new \RuntimeException(sprintf('SSH connection to %s timed out after %s seconds', $uri, self::formatTimeout($timeout))));
+        });
+    }
+
+    private static function cancelConnectTimeoutTimer(LoopInterface $loop, ?TimerInterface $timer): void
+    {
+        if (!$timer instanceof TimerInterface) {
+            return;
+        }
+
+        $loop->cancelTimer($timer);
+    }
+
+    private static function formatTimeout(float $timeout): string
+    {
+        $formatted = number_format($timeout, 3, '.', '');
+
+        return rtrim(rtrim($formatted, '0'), '.');
     }
 
     private function handleData(string $data): void

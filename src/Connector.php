@@ -4,6 +4,7 @@ namespace WilliamEggers\React\SSHClient;
 
 use Psr\Log\LoggerInterface;
 use React\Promise\PromiseInterface;
+use React\Socket\ConnectorInterface as SocketConnectorInterface;
 use WilliamEggers\React\SSHClient\Authentication\AuthenticationInterface;
 use WilliamEggers\React\SSHClient\HostKey\HostKeyVerifierInterface;
 use WilliamEggers\React\SSHClient\Loggers\NullLogger;
@@ -13,12 +14,14 @@ final readonly class Connector
     /**
      * Create a connector for opening SSH client sessions.
      *
-     * @param null|LoggerInterface $logger  optional logger for connection lifecycle events
-     * @param null|float           $timeout full connection timeout in seconds, or null to disable it
+     * @param null|LoggerInterface          $logger          optional logger for connection lifecycle events
+     * @param null|float                    $timeout         full connection timeout in seconds, or null to disable it
+     * @param null|SocketConnectorInterface $socketConnector optional underlying socket connector used for the TCP dial step
      */
     public function __construct(
         private ?LoggerInterface $logger = null,
         private ?float $timeout = 30.0,
+        private ?SocketConnectorInterface $socketConnector = null,
     ) {
         if (null !== $this->timeout && $this->timeout <= 0) {
             throw new \InvalidArgumentException('Connector timeout must be greater than 0 seconds or null to disable it');
@@ -45,6 +48,7 @@ final readonly class Connector
             $hostKeyVerifier,
             $this->logger ?? new NullLogger(),
             $this->timeout,
+            $this->socketConnector,
         );
     }
 }

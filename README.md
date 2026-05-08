@@ -176,9 +176,9 @@ SSH_PRIVATE_KEY=/path/to/id_ed25519 php examples/public-key-authentication.php
 
 The `Connector` is the main entry point for opening SSH connections.
 
-It accepts an optional PSR-3 logger and an optional full connection timeout in its constructor, and exposes a single `connect()` method:
+It accepts an optional PSR-3 logger, an optional full connection timeout, and an optional underlying `React\Socket\ConnectorInterface` in its constructor, and exposes a single `connect()` method:
 
-* **__construct(?LoggerInterface $logger = null, ?float $timeout = 30.0)**
+* **__construct(?LoggerInterface $logger = null, ?float $timeout = 30.0, ?React\Socket\ConnectorInterface $socketConnector = null)**
 
 * **connect(string $uri, AuthenticationInterface $authentication, HostKeyVerifierInterface $hostKeyVerifier): PromiseInterface<Client>**
 
@@ -193,6 +193,10 @@ The `timeout` value applies to the full SSH connection flow, including:
 * authentication
 
 Pass `null` to disable the full connection timeout entirely. Timeout values must be greater than `0` when provided.
+
+If provided, `socketConnector` is used for the raw TCP dial step before the SSH handshake begins. This allows composing the SSH client with `React\Socket\ConnectorInterface`-compatible decorators such as custom DNS, timeout, proxy, retry, or observability wrappers.
+
+The optional `socketConnector` applies only to establishing the underlying socket connection. The `timeout` constructor argument still applies to the full SSH connection lifecycle.
 
 The URI should be a host and port combination such as:
 
@@ -218,6 +222,18 @@ To disable the full connection timeout:
 
 ```php
 $connector = new WilliamEggers\React\SSHClient\Connector(timeout: null);
+```
+
+To use a custom React socket connector for the TCP dial step:
+
+```php
+use React\Socket\Connector as TcpConnector;
+use React\Socket\TimeoutConnector;
+
+$connector = new WilliamEggers\React\SSHClient\Connector(
+    timeout: 30.0,
+    socketConnector: new TimeoutConnector(new TcpConnector(), 10.0)
+);
 ```
 
 ### Client
