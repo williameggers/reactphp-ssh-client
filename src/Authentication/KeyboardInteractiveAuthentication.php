@@ -21,12 +21,19 @@ final class KeyboardInteractiveAuthentication implements AuthenticationInterface
         $this->responder = \Closure::fromCallable($responder);
     }
 
+    /**
+     * Return the username to authenticate as.
+     */
     public function getUsername(): string
     {
         return $this->username;
     }
 
     /**
+     * Build responses for the supplied keyboard-interactive challenge.
+     *
+     * Responses are returned in the same order as the challenge prompts.
+     *
      * @return list<string>
      */
     public function respond(KeyboardInteractiveChallenge $challenge): array

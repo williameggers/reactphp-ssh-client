@@ -10,14 +10,23 @@ use WilliamEggers\React\SSHClient\Values\ShellConfig;
 
 final readonly class Client
 {
+    /**
+     * Wrap an authenticated SSH connection.
+     */
     public function __construct(private Connection $connection) {}
 
     /**
+     * Execute a remote command over a new session channel.
+     *
+     * @param string             $command command string to run on the server
+     * @param null|ProcessConfig $config  optional environment configuration for the process
+     *
      * @return PromiseInterface<Process>
      */
     public function exec(string $command, ?ProcessConfig $config = null): PromiseInterface
     {
         $config ??= new ProcessConfig();
+
         /** @var Deferred<Process> $deferred */
         $deferred = new Deferred();
 
@@ -39,11 +48,16 @@ final readonly class Client
     }
 
     /**
+     * Open an interactive shell over a new PTY-backed session channel.
+     *
+     * @param null|ShellConfig $config optional terminal and environment configuration
+     *
      * @return PromiseInterface<Shell>
      */
     public function shell(?ShellConfig $config = null): PromiseInterface
     {
         $config ??= new ShellConfig();
+
         /** @var Deferred<Shell> $deferred */
         $deferred = new Deferred();
 
@@ -68,6 +82,9 @@ final readonly class Client
         return $deferred->promise();
     }
 
+    /**
+     * Close the underlying SSH connection and any active channels.
+     */
     public function close(): void
     {
         $this->connection->close();

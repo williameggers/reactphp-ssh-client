@@ -5,6 +5,8 @@ namespace WilliamEggers\React\SSHClient\Values;
 final readonly class ShellConfig
 {
     /**
+     * Configure a PTY-backed shell session.
+     *
      * @param array<string, string> $environment
      */
     public function __construct(

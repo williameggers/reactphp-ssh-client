@@ -10,6 +10,12 @@ use WilliamEggers\React\SSHClient\Loggers\NullLogger;
 
 final readonly class Connector
 {
+    /**
+     * Create a connector for opening SSH client sessions.
+     *
+     * @param null|LoggerInterface $logger  optional logger for connection lifecycle events
+     * @param null|float           $timeout full connection timeout in seconds, or null to disable it
+     */
     public function __construct(
         private ?LoggerInterface $logger = null,
         private ?float $timeout = 30.0,
@@ -20,6 +26,12 @@ final readonly class Connector
     }
 
     /**
+     * Open and authenticate an SSH connection.
+     *
+     * @param string                   $uri             SSH server address in host:port form
+     * @param AuthenticationInterface  $authentication  authentication strategy used for login
+     * @param HostKeyVerifierInterface $hostKeyVerifier host key verifier invoked during handshake
+     *
      * @return PromiseInterface<Client>
      */
     public function connect(
