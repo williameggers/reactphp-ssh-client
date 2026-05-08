@@ -135,6 +135,8 @@ The [`examples`](examples) directory contains small standalone scripts for commo
 * `quickstart-with-logging.php` - same flow with inline PSR-3 logging output
 * `exec.php` - run a command with environment variables and stream stdout/stderr
 * `shell.php` - open an interactive shell session
+* `forward-out.php` - open a direct-tcpip stream and send a raw HTTP request
+* `forward-out-pipe.php` - pipe a request stream through a direct-tcpip channel
 * `keyboard-interactive.php` - authenticate with keyboard-interactive prompts
 * `public-key-authentication.php` - authenticate with a private key from disk
 * `host-key-verification.php` - verify a server fingerprint before continuing
@@ -160,6 +162,8 @@ With the test server running, these examples work against its default configurat
 php examples/quickstart.php
 php examples/exec.php
 php examples/shell.php
+php examples/forward-out.php
+php examples/forward-out-pipe.php
 php examples/keyboard-interactive.php
 ```
 
@@ -246,6 +250,8 @@ It provides the following methods:
 
 * **shell(?ShellConfig $config = null): PromiseInterface<Shell>**
 
+* **forwardOut(string $srcIP, int $srcPort, string $dstIP, int $dstPort): PromiseInterface<DirectTcpipChannel>**
+
 * **close(): void**
 
 Use `exec()` to run a single remote command:
@@ -269,6 +275,26 @@ $client->shell(new ShellConfig('xterm-256color', new WinSize(24, 80)))->then(
         $shell->stdout()->on('data', static function (string $data): void {
             fwrite(STDOUT, $data);
         });
+    }
+);
+```
+
+Use `forwardOut()` to open a raw outbound TCP stream through the SSH server:
+
+```php
+$client->forwardOut('127.0.0.1', 8000, '127.0.0.1', 80)->then(
+    function (WilliamEggers\React\SSHClient\Channel\DirectTcpipChannel $stream): void {
+        $stream->on('data', static function (string $data): void {
+            fwrite(STDOUT, $data);
+        });
+
+        $stream->end(implode("\r\n", [
+            'HEAD / HTTP/1.1',
+            'Host: 127.0.0.1',
+            'Connection: close',
+            '',
+            '',
+        ]));
     }
 );
 ```
@@ -508,7 +534,7 @@ This SSH client implementation is intentionally scoped to support core SSH conne
 
 * **SFTP and SCP** - file transfer protocols and helpers are not implemented
 
-* **Port forwarding** - local, remote, and dynamic forwarding are not supported
+* **Port forwarding beyond `forwardOut()`** - local, remote, and dynamic forwarding are not supported
 
 * **Agent forwarding** - SSH agent forwarding is not implemented
 

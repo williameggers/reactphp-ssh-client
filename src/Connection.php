@@ -16,10 +16,13 @@ use WilliamEggers\React\SSHClient\Authentication\AuthenticationInterface;
 use WilliamEggers\React\SSHClient\Authentication\KeyboardInteractiveAuthentication;
 use WilliamEggers\React\SSHClient\Authentication\PasswordAuthentication;
 use WilliamEggers\React\SSHClient\Authentication\PublicKeyAuthentication;
+use WilliamEggers\React\SSHClient\Channel\ChannelInterface;
+use WilliamEggers\React\SSHClient\Channel\DirectTcpipChannel;
 use WilliamEggers\React\SSHClient\Channel\SessionChannel;
 use WilliamEggers\React\SSHClient\Concerns\WritesLogs;
 use WilliamEggers\React\SSHClient\Enums\MessageType;
 use WilliamEggers\React\SSHClient\Exception\AuthenticationException;
+use WilliamEggers\React\SSHClient\Exception\ChannelOpenException;
 use WilliamEggers\React\SSHClient\Exception\HostKeyException;
 use WilliamEggers\React\SSHClient\Exception\ProtocolException;
 use WilliamEggers\React\SSHClient\HostKey\HostKeyInfo;
@@ -43,11 +46,17 @@ final class Connection
     private int $nextChannelId = 0;
     private ?string $sessionId = null;
 
-    /** @var array<int, SessionChannel> */
+    /** @var array<int, ChannelInterface> */
     private array $channels = [];
 
     /** @var array<int, Deferred<bool>> */
     private array $channelReplies = [];
+
+    /** @var array<int, Deferred<ChannelInterface>> */
+    private array $pendingChannelOpens = [];
+
+    /** @var array<int, string> */
+    private array $pendingChannelTypes = [];
 
     /** @var null|Deferred<Client> */
     private ?Deferred $handshakeDeferred = null;
@@ -69,9 +78,16 @@ final class Connection
             }
         });
         $this->connection->on('error', function (\Throwable $throwable): void {
+            $this->error('Socket error', [
+                'exception' => $throwable::class,
+                'message' => $throwable->getMessage(),
+            ]);
             $this->emit('error', [$throwable]);
         });
         $this->connection->on('close', function (): void {
+            $this->info('SSH connection closed', [
+                'active_channels' => count($this->channels),
+            ]);
             foreach ($this->channels as $channel) {
                 $channel->receiveClose();
             }
@@ -89,6 +105,8 @@ final class Connection
         ?float $timeout = 30.0,
         ?SocketConnectorInterface $socketConnector = null,
     ): PromiseInterface {
+        $connectionLogger = $logger ?? new NullLogger();
+
         /** @var null|ConnectionInterface $socketConnection */
         $socketConnection = null;
 
@@ -107,29 +125,51 @@ final class Connection
                 $socketPromise->cancel();
             }
         });
-        $timer = self::createConnectTimeoutTimer($uri, $timeout, $deferred, $loop, $socketConnection, $socketPromise);
+        $connectionLogger->info('Starting SSH connection', [
+            'uri' => $uri,
+            'timeout' => $timeout,
+        ]);
+
+        $timer = self::createConnectTimeoutTimer($uri, $timeout, $deferred, $loop, $socketConnection, $socketPromise, $connectionLogger);
         $connector = $socketConnector ?? new SocketConnector(loop: $loop);
         $socketPromise = $connector->connect($uri);
         $socketPromise->then(
-            function (ConnectionInterface $connection) use ($authentication, $hostKeyVerifier, $deferred, $logger, $loop, &$timer, &$socketConnection): void {
+            function (ConnectionInterface $connection) use ($authentication, $hostKeyVerifier, $deferred, $logger, $connectionLogger, $uri, $loop, &$timer, &$socketConnection): void {
                 $socketConnection = $connection;
+                $connectionLogger->info('TCP connection established', [
+                    'uri' => $uri,
+                    'remote_address' => $connection->getRemoteAddress(),
+                ]);
                 $clientConnection = new self($connection, $logger);
                 $clientConnection->start($authentication, $hostKeyVerifier)->then(
-                    static function (Client $client) use ($deferred, $loop, &$timer): void {
+                    static function (Client $client) use ($deferred, $connectionLogger, $uri, $loop, &$timer): void {
                         self::cancelConnectTimeoutTimer($loop, $timer);
                         $timer = null;
+                        $connectionLogger->info('SSH connection ready', [
+                            'uri' => $uri,
+                        ]);
                         $deferred->resolve($client);
                     },
-                    static function (\Throwable $throwable) use ($deferred, $loop, &$timer): void {
+                    static function (\Throwable $throwable) use ($deferred, $connectionLogger, $uri, $loop, &$timer): void {
                         self::cancelConnectTimeoutTimer($loop, $timer);
                         $timer = null;
+                        $connectionLogger->error('SSH connection failed during handshake', [
+                            'uri' => $uri,
+                            'exception' => $throwable::class,
+                            'message' => $throwable->getMessage(),
+                        ]);
                         $deferred->reject($throwable);
                     }
                 );
             },
-            static function (\Throwable $throwable) use ($deferred, $loop, &$timer): void {
+            static function (\Throwable $throwable) use ($deferred, $connectionLogger, $uri, $loop, &$timer): void {
                 self::cancelConnectTimeoutTimer($loop, $timer);
                 $timer = null;
+                $connectionLogger->error('TCP connection failed', [
+                    'uri' => $uri,
+                    'exception' => $throwable::class,
+                    'message' => $throwable->getMessage(),
+                ]);
                 $deferred->reject($throwable);
             }
         );
@@ -148,12 +188,15 @@ final class Connection
         /** @var Deferred<Client> $handshakeDeferred */
         $handshakeDeferred = new Deferred();
         $this->handshakeDeferred = $handshakeDeferred;
+        $this->info('Starting SSH handshake', [
+            'remote_address' => $this->connection->getRemoteAddress(),
+        ]);
         $this->connection->write($this->clientVersion . "\r\n");
 
         return $handshakeDeferred->promise();
     }
 
-    public function writeChannelData(SessionChannel $channel, string $data): int
+    public function writeChannelData(ChannelInterface $channel, string $data): int
     {
         if ('' === $data) {
             return 0;
@@ -171,18 +214,28 @@ final class Connection
         return $offset;
     }
 
-    public function sendChannelEof(SessionChannel $channel): void
+    public function sendChannelEof(ChannelInterface $channel): void
     {
         $this->writePacked(MessageType::CHANNEL_EOF, $channel->getRemoteChannel());
     }
 
-    public function closeChannel(SessionChannel $channel): void
+    public function closeChannel(ChannelInterface $channel): void
     {
         $this->writePacked(MessageType::CHANNEL_CLOSE, $channel->getRemoteChannel());
     }
 
+    public function adjustChannelWindow(ChannelInterface $channel, int $bytesToAdd): void
+    {
+        if ($bytesToAdd <= 0) {
+            return;
+        }
+
+        $this->writePacked(MessageType::CHANNEL_WINDOW_ADJUST, [$channel->getRemoteChannel(), $bytesToAdd]);
+    }
+
     public function close(): void
     {
+        $this->info('Closing SSH connection');
         $this->connection->close();
     }
 
@@ -191,18 +244,84 @@ final class Connection
      */
     public function openSession(): PromiseInterface
     {
-        /** @var Deferred<SessionChannel> $deferred */
-        $deferred = new Deferred();
         $localChannel = $this->nextChannelId++;
         $initialWindow = 1024 * 1024;
         $maxPacketSize = 32768;
 
-        $this->emit('session.opening', [$localChannel, $deferred]);
-        $this->once('channel.open.' . $localChannel, function (SessionChannel $channel) use ($deferred): void {
+        /** @var Deferred<SessionChannel> $deferred */
+        $deferred = new Deferred();
+        $this->pendingChannelOpens[$localChannel] = new Deferred(function () use ($localChannel): void {
+            unset($this->pendingChannelOpens[$localChannel], $this->pendingChannelTypes[$localChannel]);
+        });
+        $this->pendingChannelTypes[$localChannel] = 'session';
+
+        $this->pendingChannelOpens[$localChannel]->promise()->then(function (mixed $channel) use ($deferred): void {
+            if (!$channel instanceof SessionChannel) {
+                $deferred->reject(new ProtocolException('Expected session channel open confirmation'));
+
+                return;
+            }
+
             $deferred->resolve($channel);
+        }, function (\Throwable $throwable) use ($deferred): void {
+            $deferred->reject($throwable);
         });
 
+        $this->debug('Opening SSH session channel', [
+            'local_channel' => $localChannel,
+        ]);
         $this->writePacked(MessageType::CHANNEL_OPEN, ['session', $localChannel, $initialWindow, $maxPacketSize]);
+
+        return $deferred->promise();
+    }
+
+    /**
+     * @return PromiseInterface<DirectTcpipChannel>
+     */
+    public function openDirectTcpip(string $srcIp, int $srcPort, string $dstIp, int $dstPort): PromiseInterface
+    {
+        self::assertPort($srcPort, 'Source');
+        self::assertPort($dstPort, 'Destination');
+
+        if ('' === $srcIp) {
+            throw new \InvalidArgumentException('Source IP must not be empty');
+        }
+
+        if ('' === $dstIp) {
+            throw new \InvalidArgumentException('Destination IP must not be empty');
+        }
+
+        $localChannel = $this->nextChannelId++;
+        $initialWindow = 1024 * 1024;
+        $maxPacketSize = 32768;
+
+        /** @var Deferred<DirectTcpipChannel> $deferred */
+        $deferred = new Deferred();
+        $this->pendingChannelOpens[$localChannel] = new Deferred(function () use ($localChannel): void {
+            unset($this->pendingChannelOpens[$localChannel], $this->pendingChannelTypes[$localChannel]);
+        });
+        $this->pendingChannelTypes[$localChannel] = 'direct-tcpip';
+
+        $this->pendingChannelOpens[$localChannel]->promise()->then(function (mixed $channel) use ($deferred): void {
+            if (!$channel instanceof DirectTcpipChannel) {
+                $deferred->reject(new ProtocolException('Expected direct-tcpip channel open confirmation'));
+
+                return;
+            }
+
+            $deferred->resolve($channel);
+        }, function (\Throwable $throwable) use ($deferred): void {
+            $deferred->reject($throwable);
+        });
+
+        $this->debug('Opening SSH direct-tcpip channel', [
+            'local_channel' => $localChannel,
+            'source_ip' => $srcIp,
+            'source_port' => $srcPort,
+            'destination_ip' => $dstIp,
+            'destination_port' => $dstPort,
+        ]);
+        $this->writePacked(MessageType::CHANNEL_OPEN, ['direct-tcpip', $localChannel, $initialWindow, $maxPacketSize, $dstIp, $dstPort, $srcIp, $srcPort]);
 
         return $deferred->promise();
     }
@@ -221,6 +340,13 @@ final class Connection
         } else {
             $deferred->resolve(true);
         }
+
+        $this->debug('Sending SSH channel request', [
+            'local_channel' => $channel->getLocalChannel(),
+            'remote_channel' => $channel->getRemoteChannel(),
+            'request' => $request,
+            'want_reply' => $wantReply,
+        ]);
 
         $this->writePacked(MessageType::CHANNEL_REQUEST, [...[
             $channel->getRemoteChannel(),
@@ -242,17 +368,23 @@ final class Connection
         LoopInterface $loop,
         ?ConnectionInterface &$socketConnection,
         ?PromiseInterface &$socketPromise,
+        LoggerInterface $logger,
     ): ?TimerInterface {
         if (null === $timeout) {
             return null;
         }
 
-        return $loop->addTimer($timeout, static function () use ($uri, $timeout, $deferred, &$socketConnection, &$socketPromise): void {
+        return $loop->addTimer($timeout, static function () use ($uri, $timeout, $deferred, &$socketConnection, &$socketPromise, $logger): void {
             $socketConnection?->close();
 
             if (null !== $socketPromise) {
                 $socketPromise->cancel();
             }
+
+            $logger->warning('SSH connection timed out', [
+                'uri' => $uri,
+                'timeout' => $timeout,
+            ]);
 
             $deferred->reject(new \RuntimeException(sprintf('SSH connection to %s timed out after %s seconds', $uri, self::formatTimeout($timeout))));
         });
@@ -303,6 +435,9 @@ final class Connection
             if (str_starts_with($line, 'SSH-')) {
                 $this->serverVersion = $line;
                 $this->kexNegotiator->serverVersion = $line;
+                $this->debug('Received SSH server version', [
+                    'server_version' => $line,
+                ]);
                 $this->writeConnection($this->kexNegotiator->createClientKexInit());
 
                 return;
@@ -312,6 +447,10 @@ final class Connection
 
     private function handlePacket(Packet $packet): void
     {
+        if (MessageType::DISCONNECT === $packet->type) {
+            $this->warning('Remote server disconnected');
+        }
+
         match ($packet->type) {
             MessageType::KEXINIT => $this->handleKexInit($packet),
             MessageType::KEXDH_REPLY => $this->handleKexReply($packet),
@@ -322,7 +461,7 @@ final class Connection
             MessageType::USERAUTH_SUCCESS => $this->handleUserAuthSuccess(),
             MessageType::USERAUTH_PK_OK => $this->handleUserAuthMessage60($packet),
             MessageType::CHANNEL_OPEN_CONFIRMATION => $this->handleChannelOpenConfirmation($packet),
-            MessageType::CHANNEL_OPEN_FAILURE => throw new ProtocolException('Channel open failure'),
+            MessageType::CHANNEL_OPEN_FAILURE => $this->handleChannelOpenFailure($packet),
             MessageType::CHANNEL_SUCCESS => $this->handleChannelReply($packet, true),
             MessageType::CHANNEL_FAILURE => $this->handleChannelReply($packet, false),
             MessageType::CHANNEL_WINDOW_ADJUST => $this->handleChannelWindowAdjust($packet),
@@ -338,6 +477,7 @@ final class Connection
 
     private function handleKexInit(Packet $packet): void
     {
+        $this->debug('Negotiating SSH key exchange');
         $this->kexNegotiator->acceptServerKexInit($packet);
         $this->kexNegotiator->negotiateAlgorithms();
         $this->kex = new Kex($this->kexNegotiator, $packet);
@@ -365,11 +505,26 @@ final class Connection
         $hostKeyInfo = new HostKeyInfo($hostKeyAlgorithm, $hostKeyBlob, $this->publicKeyHelper->getOpenSshKey($hostKeyBlob));
         $address = $this->connection->getRemoteAddress() ?? 'unknown';
 
+        $this->debug('Verifying SSH host key', [
+            'algorithm' => $hostKeyAlgorithm,
+            'remote_address' => $address,
+        ]);
+
         if (!$this->hostKeyVerifier?->verify($hostKeyInfo, $address)) {
+            $this->warning('SSH host key rejected by verifier', [
+                'algorithm' => $hostKeyAlgorithm,
+                'remote_address' => $address,
+            ]);
+
             throw new HostKeyException('Host key rejected by verifier');
         }
 
         if (!$this->publicKeyHelper->verifyServerHostKey($hostKeyAlgorithm, $hostKeyBlob, $signatureBlob, $kex->getExchangeHash())) {
+            $this->warning('SSH host key signature verification failed', [
+                'algorithm' => $hostKeyAlgorithm,
+                'remote_address' => $address,
+            ]);
+
             throw new HostKeyException('Host key signature verification failed');
         }
 
@@ -377,12 +532,18 @@ final class Connection
         $algorithms = $this->kexNegotiator->getNegotiatedAlgorithms() ?? throw new ProtocolException('Missing negotiated algorithms');
         $this->packetHandler->setEncryptionMethods($algorithms['encryption_ctos'], $algorithms['encryption_stoc']);
         $this->packetHandler->setMacMethods($algorithms['mac_ctos'], $algorithms['mac_stoc']);
+        $this->info('SSH key exchange completed', [
+            'hostkey' => $hostKeyAlgorithm,
+            'encryption_ctos' => $algorithms['encryption_ctos'],
+            'encryption_stoc' => $algorithms['encryption_stoc'],
+        ]);
         $this->writeConnection(chr(MessageType::NEWKEYS->value));
     }
 
     private function handleNewKeys(): void
     {
         $this->packetHandler->deriveKeys();
+        $this->debug('SSH transport encryption enabled');
         $this->writePacked(MessageType::SERVICE_REQUEST, 'ssh-userauth');
     }
 
@@ -397,6 +558,10 @@ final class Connection
             throw new ProtocolException('Unexpected accepted service: ' . $service);
         }
 
+        $this->debug('SSH service accepted', [
+            'service' => $service,
+        ]);
+
         $this->sendAuthRequest($this->authentication ?? throw new AuthenticationException('Authentication not configured'));
     }
 
@@ -408,6 +573,11 @@ final class Connection
         }
 
         $availableMethods = explode(',', $methods);
+
+        $this->warning('SSH authentication failed', [
+            'method' => self::describeAuthentication($this->authentication),
+            'available_methods' => $availableMethods,
+        ]);
 
         if ($this->authentication instanceof PasswordAuthentication) {
             throw new AuthenticationException('Password authentication failed');
@@ -434,6 +604,9 @@ final class Connection
 
     private function handleUserAuthSuccess(): void
     {
+        $this->info('SSH authentication succeeded', [
+            'method' => self::describeAuthentication($this->authentication),
+        ]);
         $client = new Client($this);
         $this->handshakeDeferred?->resolve($client);
     }
@@ -444,6 +617,8 @@ final class Connection
         if (!$authentication instanceof PublicKeyAuthentication) {
             throw new AuthenticationException('Unexpected USERAUTH_PK_OK packet');
         }
+
+        $this->debug('SSH public key accepted, sending signed request');
 
         $this->sendSignedPublicKeyRequest($authentication);
     }
@@ -459,6 +634,8 @@ final class Connection
         if (!$this->authentication instanceof KeyboardInteractiveAuthentication) {
             throw new AuthenticationException('Unexpected USERAUTH_INFO_REQUEST packet');
         }
+
+        $authentication = $this->authentication;
 
         [$name, $instruction, $languageTag, $promptCount] = $packet->extractFormat('%s%s%s%u');
         if (!is_string($name) || !is_string($instruction) || !is_string($languageTag) || !is_int($promptCount)) {
@@ -476,7 +653,10 @@ final class Connection
         }
 
         $challenge = new KeyboardInteractiveChallenge($name, $instruction, $languageTag, $prompts);
-        $responses = $this->authentication->respond($challenge);
+        $this->debug('Received keyboard-interactive challenge', [
+            'prompt_count' => $promptCount,
+        ]);
+        $responses = $authentication->respond($challenge);
         $values = [count($responses)];
         foreach ($responses as $response) {
             $values[] = $response;
@@ -492,9 +672,46 @@ final class Connection
             throw new ProtocolException('Invalid channel open confirmation');
         }
 
-        $channel = new SessionChannel($this, $localChannel, $remoteChannel, $initialWindow, $maxPacketSize);
+        $channelType = $this->pendingChannelTypes[$localChannel] ?? null;
+        $channel = match ($channelType) {
+            'session' => new SessionChannel($this, $localChannel, $remoteChannel, $initialWindow, $maxPacketSize),
+            'direct-tcpip' => new DirectTcpipChannel($this, $localChannel, $remoteChannel, $initialWindow, $maxPacketSize),
+            default => throw new ProtocolException('Unexpected channel open confirmation'),
+        };
+
+        $this->info('SSH channel opened', [
+            'type' => $channelType,
+            'local_channel' => $localChannel,
+            'remote_channel' => $remoteChannel,
+        ]);
+
         $this->channels[$localChannel] = $channel;
-        $this->emit('channel.open.' . $localChannel, [$channel]);
+        $deferred = $this->pendingChannelOpens[$localChannel] ?? null;
+        unset($this->pendingChannelOpens[$localChannel], $this->pendingChannelTypes[$localChannel]);
+        $deferred?->resolve($channel);
+    }
+
+    private function handleChannelOpenFailure(Packet $packet): void
+    {
+        [$localChannel, $reasonCode, $description] = $packet->extractFormat('%u%u%s%s');
+        if (!is_int($localChannel) || !is_int($reasonCode) || !is_string($description)) {
+            throw new ProtocolException('Invalid channel open failure');
+        }
+
+        $deferred = $this->pendingChannelOpens[$localChannel] ?? null;
+        unset($this->pendingChannelOpens[$localChannel], $this->pendingChannelTypes[$localChannel]);
+
+        $this->warning('SSH channel open failed', [
+            'local_channel' => $localChannel,
+            'reason_code' => $reasonCode,
+            'description' => $description,
+        ]);
+
+        if (!$deferred instanceof Deferred) {
+            throw new ChannelOpenException('SSH channel open failed: ' . $description, $reasonCode, $description);
+        }
+
+        $deferred->reject(new ChannelOpenException('SSH channel open failed: ' . $description, $reasonCode, $description));
     }
 
     private function handleChannelReply(Packet $packet, bool $success): void
@@ -506,6 +723,10 @@ final class Connection
 
         $deferred = $this->channelReplies[$recipientChannel] ?? null;
         unset($this->channelReplies[$recipientChannel]);
+        $this->debug('Received SSH channel request reply', [
+            'local_channel' => $recipientChannel,
+            'success' => $success,
+        ]);
         $deferred?->resolve($success);
     }
 
@@ -529,7 +750,7 @@ final class Connection
         }
 
         if (isset($this->channels[$recipientChannel])) {
-            $this->channels[$recipientChannel]->writeStdout($data);
+            $this->channels[$recipientChannel]->writeData($data);
         }
     }
 
@@ -540,8 +761,8 @@ final class Connection
             throw new ProtocolException('Invalid extended data payload');
         }
 
-        if (1 === $dataTypeCode && isset($this->channels[$recipientChannel])) {
-            $this->channels[$recipientChannel]->writeStderr($data);
+        if (isset($this->channels[$recipientChannel])) {
+            $this->channels[$recipientChannel]->writeExtendedData($dataTypeCode, $data);
         }
     }
 
@@ -565,12 +786,22 @@ final class Connection
         }
 
         $channel = $this->channels[$recipientChannel] ?? null;
-        if (null === $channel) {
+        if (!$channel instanceof ChannelInterface) {
             return;
         }
 
+        $this->info('SSH channel closed', [
+            'local_channel' => $recipientChannel,
+        ]);
         $channel->receiveClose();
         unset($this->channels[$recipientChannel]);
+    }
+
+    private static function assertPort(int $port, string $label): void
+    {
+        if ($port < 0 || $port > 65535) {
+            throw new \InvalidArgumentException(sprintf('%s port must be between 0 and 65535', $label));
+        }
     }
 
     private function handleChannelRequest(Packet $packet): void
@@ -581,7 +812,7 @@ final class Connection
         }
 
         $channel = $this->channels[$recipientChannel] ?? null;
-        if (null === $channel) {
+        if (!$channel instanceof SessionChannel) {
             return;
         }
 
@@ -606,6 +837,10 @@ final class Connection
     private function sendAuthRequest(AuthenticationInterface $authentication): void
     {
         if ($authentication instanceof PasswordAuthentication) {
+            $this->debug('Sending SSH authentication request', [
+                'method' => 'password',
+                'username' => $authentication->getUsername(),
+            ]);
             $this->writePacked(MessageType::USERAUTH_REQUEST, [
                 $authentication->getUsername(),
                 'ssh-connection',
@@ -618,12 +853,20 @@ final class Connection
         }
 
         if ($authentication instanceof PublicKeyAuthentication) {
+            $this->debug('Sending SSH authentication request', [
+                'method' => 'publickey',
+                'username' => $authentication->getUsername(),
+            ]);
             $this->sendUnsignedPublicKeyRequest($authentication);
 
             return;
         }
 
         if ($authentication instanceof KeyboardInteractiveAuthentication) {
+            $this->debug('Sending SSH authentication request', [
+                'method' => 'keyboard-interactive',
+                'username' => $authentication->getUsername(),
+            ]);
             $this->sendKeyboardInteractiveRequest($authentication);
 
             return;
@@ -692,5 +935,16 @@ final class Connection
     private function writePacked(MessageType $type, mixed $value = null): void
     {
         $this->writeConnection($this->packetHandler->packValues($type, is_array($value) ? array_values($value) : [$value]));
+    }
+
+    private static function describeAuthentication(?AuthenticationInterface $authentication): ?string
+    {
+        return match (true) {
+            $authentication instanceof PasswordAuthentication => 'password',
+            $authentication instanceof PublicKeyAuthentication => 'publickey',
+            $authentication instanceof KeyboardInteractiveAuthentication => 'keyboard-interactive',
+            null === $authentication => null,
+            default => $authentication::class,
+        };
     }
 }

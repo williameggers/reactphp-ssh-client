@@ -24,6 +24,7 @@ Additional variables used by specific examples:
 - `SSH_HOST_FINGERPRINT` expected `SHA256:...` host key fingerprint
 - `SSH_TERM`, `SSH_ROWS`, `SSH_COLS` for shell sessions
 - `SSH_ENV_GREETING`, `SSH_ENV_TARGET` for `exec.php`
+- `SSH_FORWARD_SRC_IP`, `SSH_FORWARD_SRC_PORT`, `SSH_FORWARD_DST_IP`, `SSH_FORWARD_DST_PORT` for `forward-out.php` and `forward-out-pipe.php`
 
 ## Files
 
@@ -34,5 +35,9 @@ Additional variables used by specific examples:
 - `keyboard-interactive.php`: Authenticate with keyboard-interactive prompts.
 - `public-key-authentication.php`: Authenticate with a private key from disk.
 - `host-key-verification.php`: Verify the server host key fingerprint before continuing.
+- `forward-out.php`: Open a `direct-tcpip` stream and send a raw HTTP request through it.
+- `forward-out-pipe.php`: Pipe a request stream into `forwardOut()` and pipe the response to `STDOUT`.
+
+`test-server.php` includes a built-in HTTP target for `forwardOut()` demos, so `forward-out.php` and `forward-out-pipe.php` can be run directly against it without extra setup.
 
 `quickstart.php`, `exec.php`, `shell.php`, `keyboard-interactive.php`, and `public-key-authentication.php` use a permissive host key verifier for demonstration purposes only. Use `host-key-verification.php` as the safer production pattern.

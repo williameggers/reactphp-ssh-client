@@ -4,6 +4,7 @@ namespace WilliamEggers\React\SSHClient;
 
 use React\Promise\Deferred;
 use React\Promise\PromiseInterface;
+use WilliamEggers\React\SSHClient\Channel\DirectTcpipChannel;
 use WilliamEggers\React\SSHClient\Channel\SessionChannel;
 use WilliamEggers\React\SSHClient\Values\ProcessConfig;
 use WilliamEggers\React\SSHClient\Values\ShellConfig;
@@ -80,6 +81,16 @@ final readonly class Client
         });
 
         return $deferred->promise();
+    }
+
+    /**
+     * Open a direct-tcpip channel for outbound TCP forwarding.
+     *
+     * @return PromiseInterface<DirectTcpipChannel>
+     */
+    public function forwardOut(string $srcIP, int $srcPort, string $dstIP, int $dstPort): PromiseInterface
+    {
+        return $this->connection->openDirectTcpip($srcIP, $srcPort, $dstIP, $dstPort);
     }
 
     /**
