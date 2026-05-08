@@ -18,6 +18,7 @@ final class TestSshServer
     private ?Server $server = null;
     private ?string $address = null;
     private ?TcpServer $tcpServer = null;
+
     /** @var list<TcpConnectionInterface> */
     private array $tcpConnections = [];
 
