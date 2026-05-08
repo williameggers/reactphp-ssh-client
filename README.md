@@ -5,6 +5,8 @@
 
 This project is an event-driven, standalone SSH client implementation for [ReactPHP](https://reactphp.org/) developed by William Eggers. It provides a small asynchronous API for connecting to SSH servers, authenticating, opening shell sessions, and executing remote commands.
 
+> Looking for an SSH server too? Check out [williameggers/reactphp-ssh-server](https://github.com/williameggers/reactphp-ssh-server) or [WhispPHP/whisp](https://github.com/WhispPHP/whisp).
+
 ## Overview
 
 * Implements core SSH client functionality, including transport negotiation, host key validation, authentication, and session channel management
@@ -174,9 +176,23 @@ SSH_PRIVATE_KEY=/path/to/id_ed25519 php examples/public-key-authentication.php
 
 The `Connector` is the main entry point for opening SSH connections.
 
-It accepts an optional PSR-3 logger in its constructor and exposes a single `connect()` method:
+It accepts an optional PSR-3 logger and an optional full connection timeout in its constructor, and exposes a single `connect()` method:
+
+* **__construct(?LoggerInterface $logger = null, ?float $timeout = 30.0)**
 
 * **connect(string $uri, AuthenticationInterface $authentication, HostKeyVerifierInterface $hostKeyVerifier): PromiseInterface<Client>**
+
+The `timeout` value applies to the full SSH connection flow, including:
+
+* TCP connect
+
+* SSH version exchange
+
+* key exchange
+
+* authentication
+
+Pass `null` to disable the full connection timeout entirely. Timeout values must be greater than `0` when provided.
 
 The URI should be a host and port combination such as:
 
@@ -189,13 +205,19 @@ The URI should be a host and port combination such as:
 Example:
 
 ```php
-$connector = new WilliamEggers\React\SSHClient\Connector();
+$connector = new WilliamEggers\React\SSHClient\Connector(timeout: 30.0);
 
 $connector->connect(
     'example.com:22',
     new WilliamEggers\React\SSHClient\Authentication\PasswordAuthentication('user', 'secret'),
     new WilliamEggers\React\SSHClient\HostKey\CallbackHostKeyVerifier(static fn (): bool => true),
 );
+```
+
+To disable the full connection timeout:
+
+```php
+$connector = new WilliamEggers\React\SSHClient\Connector(timeout: null);
 ```
 
 ### Client
@@ -396,6 +418,8 @@ Several small value objects are used to configure process and shell sessions.
 ## Error handling
 
 Connection and session operations may reject their promises with exceptions from the `WilliamEggers\React\SSHClient\Exception` namespace.
+
+`Connector::connect()` may also reject with a `RuntimeException` if the configured full connection timeout is reached before SSH authentication completes.
 
 The most relevant exception types are:
 

@@ -6,6 +6,8 @@ use React\EventLoop\Loop;
 use React\EventLoop\LoopInterface;
 use React\Promise\Deferred;
 use React\Promise\PromiseInterface;
+use React\Socket\ConnectionInterface as TcpConnectionInterface;
+use React\Socket\TcpServer;
 use WilliamEggers\React\SSH\Channel;
 use WilliamEggers\React\SSH\Connection;
 use WilliamEggers\React\SSH\Server;
@@ -13,7 +15,11 @@ use WilliamEggers\React\SSH\Values\KeyboardInteractiveConfig;
 
 final class TestSshServer
 {
-    private readonly Server $server;
+    private ?Server $server = null;
+    private ?string $address = null;
+    private ?TcpServer $tcpServer = null;
+    /** @var list<TcpConnectionInterface> */
+    private array $tcpConnections = [];
 
     /**
      * @param callable(Connection): void $configure
@@ -32,12 +38,20 @@ final class TestSshServer
 
     public function getAddress(): string
     {
-        return $this->server->getAddress() ?? throw new \RuntimeException('Server address unavailable');
+        return $this->address
+            ?? $this->tcpServer?->getAddress()
+            ?? $this->server?->getAddress()
+            ?? throw new \RuntimeException('Server address unavailable');
     }
 
     public function close(): void
     {
-        $this->server->close();
+        $this->server?->close();
+        foreach ($this->tcpConnections as $connection) {
+            $connection->close();
+        }
+
+        $this->tcpServer?->close();
     }
 
     /**
@@ -137,6 +151,35 @@ final class TestSshServer
         });
 
         $deferred->resolve($server->getAddress());
+
+        return $deferred->promise();
+    }
+
+    /**
+     * @return PromiseInterface<self>
+     */
+    public static function silentTcpServer(): PromiseInterface
+    {
+        /** @var Deferred<self> $deferred */
+        $deferred = new Deferred();
+        $loop = Loop::get();
+        $server = new self($loop, static function (): void {});
+        $server->server?->close();
+        $server->server = null;
+        $server->tcpServer = new TcpServer('127.0.0.1:0', $loop);
+        $server->address = $server->tcpServer->getAddress();
+        $server->tcpServer->on('connection', function (TcpConnectionInterface $connection) use ($server): void {
+            $server->tcpConnections[] = $connection;
+            $connection->on('close', function () use ($server, $connection): void {
+                $server->tcpConnections = array_values(array_filter(
+                    $server->tcpConnections,
+                    static fn (TcpConnectionInterface $existing): bool => $existing !== $connection,
+                ));
+            });
+            $connection->on('data', static function (): void {});
+        });
+
+        $deferred->resolve($server);
 
         return $deferred->promise();
     }

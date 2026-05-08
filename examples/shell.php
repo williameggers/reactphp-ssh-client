@@ -19,7 +19,7 @@ $term = getenv('SSH_TERM') ?: 'xterm-256color';
 $rows = (int) (getenv('SSH_ROWS') ?: '24');
 $cols = (int) (getenv('SSH_COLS') ?: '80');
 
-$connector = new Connector();
+$connector = new Connector(timeout: 30.0);
 $connector->connect(
     sprintf('%s:%d', $host, $port),
     new PasswordAuthentication($username, $password),

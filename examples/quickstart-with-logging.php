@@ -29,7 +29,7 @@ $logger = new class() extends AbstractLogger {
     }
 };
 
-$connector = new Connector($logger);
+$connector = new Connector(logger: $logger, timeout: 30.0);
 $connector->connect(
     sprintf('%s:%d', $host, $port),
     new PasswordAuthentication($username, $password),

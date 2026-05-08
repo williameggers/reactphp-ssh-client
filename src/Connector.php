@@ -10,7 +10,14 @@ use WilliamEggers\React\SSHClient\Loggers\NullLogger;
 
 final readonly class Connector
 {
-    public function __construct(private ?LoggerInterface $logger = null) {}
+    public function __construct(
+        private ?LoggerInterface $logger = null,
+        private ?float $timeout = 30.0,
+    ) {
+        if (null !== $this->timeout && $this->timeout <= 0) {
+            throw new \InvalidArgumentException('Connector timeout must be greater than 0 seconds or null to disable it');
+        }
+    }
 
     /**
      * @return PromiseInterface<Client>
@@ -25,6 +32,7 @@ final readonly class Connector
             $authentication,
             $hostKeyVerifier,
             $this->logger ?? new NullLogger(),
+            $this->timeout,
         );
     }
 }

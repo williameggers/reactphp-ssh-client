@@ -5,6 +5,7 @@ namespace WilliamEggers\React\SSHClient;
 use Evenement\EventEmitterTrait;
 use Psr\Log\LoggerInterface;
 use React\EventLoop\Loop;
+use React\EventLoop\TimerInterface;
 use React\Promise\Deferred;
 use React\Promise\PromiseInterface;
 use React\Socket\ConnectionInterface;
@@ -83,28 +84,95 @@ final class Connection
         AuthenticationInterface $authentication,
         HostKeyVerifierInterface $hostKeyVerifier,
         ?LoggerInterface $logger = null,
+        ?float $timeout = 30.0,
     ): PromiseInterface {
+        /** @var ConnectionInterface|null $socketConnection */
+        $socketConnection = null;
+        /** @var PromiseInterface<ConnectionInterface>|null $socketPromise */
+        $socketPromise = null;
+        $loop = Loop::get();
+        $timer = null;
         /** @var Deferred<Client> $deferred */
-        $deferred = new Deferred();
-        $connector = new SocketConnector(loop: Loop::get());
-        $connector->connect($uri)->then(
-            function (ConnectionInterface $connection) use ($authentication, $hostKeyVerifier, $deferred, $logger): void {
+        $deferred = new Deferred(static function () use (&$socketConnection, &$socketPromise, $loop, &$timer): void {
+            self::cancelConnectTimeoutTimer($loop, $timer);
+            $timer = null;
+            $socketConnection?->close();
+
+            if (null !== $socketPromise) {
+                $socketPromise->cancel();
+            }
+        });
+        $timer = self::createConnectTimeoutTimer($uri, $timeout, $deferred, $loop, $socketConnection, $socketPromise);
+        $connector = new SocketConnector(loop: $loop);
+        $socketPromise = $connector->connect($uri);
+        $socketPromise->then(
+            function (ConnectionInterface $connection) use ($authentication, $hostKeyVerifier, $deferred, $logger, $loop, &$timer, &$socketConnection): void {
+                $socketConnection = $connection;
                 $clientConnection = new self($connection, $logger);
                 $clientConnection->start($authentication, $hostKeyVerifier)->then(
-                    static function (Client $client) use ($deferred): void {
+                    static function (Client $client) use ($deferred, $loop, &$timer): void {
+                        self::cancelConnectTimeoutTimer($loop, $timer);
+                        $timer = null;
                         $deferred->resolve($client);
                     },
-                    static function (\Throwable $throwable) use ($deferred): void {
+                    static function (\Throwable $throwable) use ($deferred, $loop, &$timer): void {
+                        self::cancelConnectTimeoutTimer($loop, $timer);
+                        $timer = null;
                         $deferred->reject($throwable);
                     }
                 );
             },
-            static function (\Throwable $throwable) use ($deferred): void {
+            static function (\Throwable $throwable) use ($deferred, $loop, &$timer): void {
+                self::cancelConnectTimeoutTimer($loop, $timer);
+                $timer = null;
                 $deferred->reject($throwable);
             }
         );
 
         return $deferred->promise();
+    }
+
+    /**
+     * @param Deferred<Client> $deferred
+     * @param PromiseInterface<ConnectionInterface>|null $socketPromise
+     */
+    private static function createConnectTimeoutTimer(
+        string $uri,
+        ?float $timeout,
+        Deferred $deferred,
+        \React\EventLoop\LoopInterface $loop,
+        ?ConnectionInterface &$socketConnection,
+        ?PromiseInterface &$socketPromise,
+    ): ?TimerInterface {
+        if (null === $timeout) {
+            return null;
+        }
+
+        return $loop->addTimer($timeout, static function () use ($uri, $timeout, $deferred, &$socketConnection, &$socketPromise): void {
+            $socketConnection?->close();
+
+            if (null !== $socketPromise) {
+                $socketPromise->cancel();
+            }
+
+            $deferred->reject(new \RuntimeException(sprintf('SSH connection to %s timed out after %s seconds', $uri, self::formatTimeout($timeout))));
+        });
+    }
+
+    private static function cancelConnectTimeoutTimer(\React\EventLoop\LoopInterface $loop, ?TimerInterface $timer): void
+    {
+        if (!$timer instanceof TimerInterface) {
+            return;
+        }
+
+        $loop->cancelTimer($timer);
+    }
+
+    private static function formatTimeout(float $timeout): string
+    {
+        $formatted = number_format($timeout, 3, '.', '');
+
+        return rtrim(rtrim($formatted, '0'), '.');
     }
 
     /**
