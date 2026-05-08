@@ -2,7 +2,6 @@
 
 require __DIR__ . '/../vendor/autoload.php';
 
-use Closure;
 use React\EventLoop\Loop;
 use WilliamEggers\React\SSHClient\Authentication\PasswordAuthentication;
 use WilliamEggers\React\SSHClient\Channel\ForwardedTcpipChannel;
@@ -47,8 +46,9 @@ $connector->connect(
         });
 
         $client->forwardIn($bindAddress, $bindPort)->then(
-            static function (int $listeningPort): void {
+            static function (int $listeningPort) use ($bindAddress): void {
                 fwrite(STDOUT, 'Listening for forwarded TCP connections on port ' . $listeningPort . PHP_EOL);
+                fwrite(STDOUT, 'Try from another terminal: curl -i http://' . $bindAddress . ':' . $listeningPort . PHP_EOL);
             },
             static function (Throwable $throwable) use ($client): void {
                 fwrite(STDERR, 'Failed to request remote port forwarding: ' . $throwable->getMessage() . PHP_EOL);

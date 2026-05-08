@@ -42,4 +42,6 @@ Additional variables used by specific examples:
 
 `test-server.php` includes a built-in HTTP target for `forwardOut()` demos, so `forward-out.php` and `forward-out-pipe.php` can be run directly against it without extra setup.
 
+`test-server.php` also enables remote TCP forwarding for `forward-in.php`. Start the server, run `php examples/forward-in.php`, and then connect to the forwarded port from another terminal, for example with `curl -i http://127.0.0.1:8000`.
+
 `quickstart.php`, `exec.php`, `shell.php`, `keyboard-interactive.php`, and `public-key-authentication.php` use a permissive host key verifier for demonstration purposes only. Use `host-key-verification.php` as the safer production pattern.

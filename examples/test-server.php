@@ -49,12 +49,24 @@ $server = new Server(
 );
 
 $server->enableAuthentication();
+$server->enableRemoteForwarding();
 $server->on('connection', static function (Connection $connection) use ($authorizedKey, $httpTargetAddress, $keyboardResponse, $password, $tcpConnector, $username): void {
     $connection->setKeyboardInteractiveConfig(new KeyboardInteractiveConfig(
         title: 'Example test server',
         instruction: 'Enter the configured password',
         prompts: [['prompt' => 'Password:', 'echo' => false]],
     ));
+
+    $connection->on('global-request.tcpip-forward', static function (string $bindAddress, int $bindPort, Deferred $allowed): void {
+        fwrite(STDOUT, sprintf("Approved remote forward on %s:%d\n", $bindAddress, $bindPort));
+        $allowed->resolve(true);
+    });
+    $connection->on('global-request.cancel-tcpip-forward', static function (string $bindAddress, int $bindPort): void {
+        fwrite(STDOUT, sprintf("Cancelled remote forward on %s:%d\n", $bindAddress, $bindPort));
+    });
+    $connection->on('forwarded-tcpip.connection', static function (array $info): void {
+        fwrite(STDOUT, 'Accepted forwarded TCP socket: ' . json_encode($info, JSON_THROW_ON_ERROR) . PHP_EOL);
+    });
 
     $connection->on('authenticate', static function (string $attemptedUsername, string $method, array $credentials, Deferred $authenticated) use ($authorizedKey, $keyboardResponse, $password, $username): void {
         if ($attemptedUsername !== $username) {
@@ -136,7 +148,7 @@ fwrite(STDOUT, 'Password: ' . $password . "\n");
 fwrite(STDOUT, 'Keyboard-interactive response: ' . $keyboardResponse . "\n");
 fwrite(STDOUT, 'Host key path: ' . $hostKeyPath . "\n");
 fwrite(STDOUT, 'forwardOut target: ' . $httpTargetAddress . "\n");
-fwrite(STDOUT, "forwardIn support: not available in the current example server dependency\n");
+fwrite(STDOUT, "forwardIn support: enabled\n");
 
 if ('' === $authorizedKey) {
     fwrite(STDOUT, "Public key auth: disabled (set SSH_AUTHORIZED_KEY to enable it)\n");
@@ -149,7 +161,7 @@ fwrite(STDOUT, "Client example commands:\n");
 fwrite(STDOUT, sprintf("  php examples/quickstart.php\n"));
 fwrite(STDOUT, sprintf("  php examples/exec.php\n"));
 fwrite(STDOUT, sprintf("  php examples/shell.php\n"));
-fwrite(STDOUT, sprintf("  php examples/forward-in.php  # requires server-side tcpip-forward support\n"));
+fwrite(STDOUT, sprintf("  php examples/forward-in.php\n"));
 fwrite(STDOUT, sprintf("  php examples/forward-out.php\n"));
 fwrite(STDOUT, sprintf("  php examples/forward-out-pipe.php\n"));
 fwrite(STDOUT, sprintf("  php examples/keyboard-interactive.php\n"));
@@ -158,6 +170,10 @@ if ('' !== $authorizedKey) {
     fwrite(STDOUT, sprintf("  SSH_PRIVATE_KEY=/path/to/id_ed25519 php examples/public-key-authentication.php\n"));
 }
 
+fwrite(STDOUT, "\n");
+fwrite(STDOUT, "To exercise forwardIn from another terminal:\n");
+fwrite(STDOUT, sprintf("  php examples/forward-in.php\n"));
+fwrite(STDOUT, sprintf("  curl -i http://127.0.0.1:8000\n"));
 fwrite(STDOUT, "\n");
 fwrite(STDOUT, "Press Ctrl-C to stop the server.\n");
 

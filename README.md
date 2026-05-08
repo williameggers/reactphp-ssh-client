@@ -163,9 +163,17 @@ With the test server running, these examples work against its default configurat
 php examples/quickstart.php
 php examples/exec.php
 php examples/shell.php
+php examples/forward-in.php
 php examples/forward-out.php
 php examples/forward-out-pipe.php
 php examples/keyboard-interactive.php
+```
+
+To exercise `forward-in.php`, start the test server, run the example, and then connect to the forwarded port from another terminal:
+
+```bash
+php examples/forward-in.php
+curl -i http://127.0.0.1:8000
 ```
 
 To enable `public-key-authentication.php`, start the server with an OpenSSH-format public key:
