@@ -5,7 +5,6 @@ require __DIR__ . '/../vendor/autoload.php';
 use React\EventLoop\Loop;
 use React\Promise\Deferred;
 use React\Socket\ConnectionInterface as TcpConnectionInterface;
-use React\Socket\Connector;
 use React\Socket\TcpServer;
 use WilliamEggers\React\SSH\Channel;
 use WilliamEggers\React\SSH\Connection;
@@ -38,8 +37,6 @@ $httpTargetServer->on('connection', static function (TcpConnectionInterface $con
     });
 });
 
-$tcpConnector = new Connector(loop: Loop::get());
-
 $server = new Server(
     sprintf('%s:%d', $host, $port),
     60,
@@ -49,8 +46,9 @@ $server = new Server(
 );
 
 $server->enableAuthentication();
+$server->enableDirectTcpip();
 $server->enableRemoteForwarding();
-$server->on('connection', static function (Connection $connection) use ($authorizedKey, $httpTargetAddress, $keyboardResponse, $password, $tcpConnector, $username): void {
+$server->on('connection', static function (Connection $connection) use ($authorizedKey, $keyboardResponse, $password, $username): void {
     $connection->setKeyboardInteractiveConfig(new KeyboardInteractiveConfig(
         title: 'Example test server',
         instruction: 'Enter the configured password',
@@ -66,6 +64,10 @@ $server->on('connection', static function (Connection $connection) use ($authori
     });
     $connection->on('forwarded-tcpip.connection', static function (array $info): void {
         fwrite(STDOUT, 'Accepted forwarded TCP socket: ' . json_encode($info, JSON_THROW_ON_ERROR) . PHP_EOL);
+    });
+    $connection->on('direct-tcpip', static function (array $info, Deferred $allowed): void {
+        fwrite(STDOUT, 'Approved direct TCP/IP request: ' . json_encode($info, JSON_THROW_ON_ERROR) . PHP_EOL);
+        $allowed->resolve(true);
     });
 
     $connection->on('authenticate', static function (string $attemptedUsername, string $method, array $credentials, Deferred $authenticated) use ($authorizedKey, $keyboardResponse, $password, $username): void {
@@ -97,29 +99,7 @@ $server->on('connection', static function (Connection $connection) use ($authori
         $authenticated->resolve(false);
     });
 
-    $connection->on('channel.open', static function (Channel $channel) use ($httpTargetAddress, $tcpConnector): void {
-        if ('direct-tcpip' === $channel->getChannelType()) {
-            $tcpConnector->connect($httpTargetAddress)->then(static function (TcpConnectionInterface $target) use ($channel): void {
-                $target->on('data', static function (string $data) use ($channel): void {
-                    $channel->write($data);
-                });
-                $target->on('close', static function () use ($channel): void {
-                    $channel->close();
-                });
-                $channel->on('data', static function (string $data) use ($target): void {
-                    $target->write($data);
-                });
-                $channel->on('close', static function () use ($target): void {
-                    $target->close();
-                });
-            }, static function (Throwable $throwable) use ($channel): void {
-                $channel->write('Failed to connect forward target: ' . $throwable->getMessage() . "\n");
-                $channel->close();
-            });
-
-            return;
-        }
-
+    $connection->on('channel.open', static function (Channel $channel): void {
         $channel->on('exec-request', static function (string $command, Deferred $started) use ($channel): void {
             $started->resolve(true);
             $channel->write('executed:' . $command . "\n");
@@ -162,8 +142,8 @@ fwrite(STDOUT, sprintf("  php examples/quickstart.php\n"));
 fwrite(STDOUT, sprintf("  php examples/exec.php\n"));
 fwrite(STDOUT, sprintf("  php examples/shell.php\n"));
 fwrite(STDOUT, sprintf("  php examples/forward-in.php\n"));
-fwrite(STDOUT, sprintf("  php examples/forward-out.php\n"));
-fwrite(STDOUT, sprintf("  php examples/forward-out-pipe.php\n"));
+fwrite(STDOUT, sprintf("  SSH_FORWARD_DST_PORT=%d php examples/forward-out.php\n", parse_url($httpTargetAddress, PHP_URL_PORT)));
+fwrite(STDOUT, sprintf("  SSH_FORWARD_DST_PORT=%d php examples/forward-out-pipe.php\n", parse_url($httpTargetAddress, PHP_URL_PORT)));
 fwrite(STDOUT, sprintf("  php examples/keyboard-interactive.php\n"));
 
 if ('' !== $authorizedKey) {

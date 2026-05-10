@@ -40,7 +40,9 @@ Additional variables used by specific examples:
 - `forward-out.php`: Open a `direct-tcpip` stream and send a raw HTTP request through it.
 - `forward-out-pipe.php`: Pipe a request stream into `forwardOut()` and pipe the response to `STDOUT`.
 
-`test-server.php` includes a built-in HTTP target for `forwardOut()` demos, so `forward-out.php` and `forward-out-pipe.php` can be run directly against it without extra setup.
+`test-server.php` includes a built-in HTTP target for `forwardOut()` demos and explicitly enables and approves `direct-tcpip` requests.
+
+Because that HTTP target binds an ephemeral port, use the exact `SSH_FORWARD_DST_PORT=...` command printed by `php examples/test-server.php` when running `forward-out.php` or `forward-out-pipe.php`.
 
 `test-server.php` also enables remote TCP forwarding for `forward-in.php`. Start the server, run `php examples/forward-in.php`, and then connect to the forwarded port from another terminal, for example with `curl -i http://127.0.0.1:8000`.
 
