@@ -22,13 +22,23 @@ test('forwardOut opens a direct-tcpip stream and reads the response after end', 
         }
 
         $address = $server->getAddress();
+        $forwardTargetPort = parse_url($server->getForwardTargetAddress(), PHP_URL_PORT);
+        if (!is_int($forwardTargetPort)) {
+            throw new RuntimeException('Forward target port unavailable');
+        }
+
         $connector = new Connector();
         $connector->connect(
             $address,
             new PasswordAuthentication('user', 'secret'),
             new CallbackHostKeyVerifier(static fn (): bool => true),
         )->then(function (Client $client) use (&$server): void {
-            $client->forwardOut('127.0.0.1', 8000, '127.0.0.1', 80)->then(function (DirectTcpipChannel $stream) use ($client, &$server): void {
+            $forwardTargetPort = parse_url($server->getForwardTargetAddress(), PHP_URL_PORT);
+            if (!is_int($forwardTargetPort)) {
+                throw new RuntimeException('Forward target port unavailable');
+            }
+
+            $client->forwardOut('127.0.0.1', 8000, '127.0.0.1', $forwardTargetPort)->then(function (DirectTcpipChannel $stream) use ($client, &$server): void {
                 $response = '';
 
                 $stream->on('data', static function (string $data) use (&$response): void {

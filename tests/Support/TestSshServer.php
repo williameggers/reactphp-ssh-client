@@ -7,7 +7,6 @@ use React\EventLoop\LoopInterface;
 use React\Promise\Deferred;
 use React\Promise\PromiseInterface;
 use React\Socket\ConnectionInterface as TcpConnectionInterface;
-use React\Socket\Connector;
 use React\Socket\TcpServer;
 use WilliamEggers\React\SSH\Channel;
 use WilliamEggers\React\SSH\Connection;
@@ -38,6 +37,11 @@ final class TestSshServer
         $this->server->on('connection', static function (Connection $connection) use ($configure): void {
             $configure($connection);
         });
+    }
+
+    public function enableDirectTcpip(): void
+    {
+        $this->server?->enableDirectTcpip();
     }
 
     public function getAddress(): string
@@ -202,10 +206,9 @@ final class TestSshServer
         /** @var Deferred<self> $deferred */
         $deferred = new Deferred();
         $loop = Loop::get();
-        $connector = new Connector(loop: $loop);
 
         $server = null;
-        $server = new self($loop, function (Connection $connection) use ($password, $connector, &$server): void {
+        $server = new self($loop, function (Connection $connection) use ($password): void {
             $connection->on('authenticate', function (string $username, string $method, array $credentials, Deferred $authDeferred) use ($password): void {
                 if ('password' === $method) {
                     $authDeferred->resolve(($credentials[0] ?? null) === $password);
@@ -216,34 +219,11 @@ final class TestSshServer
                 $authDeferred->resolve(false);
             });
 
-            $connection->on('channel.open', function (Channel $channel) use ($connector, &$server): void {
-                if ('direct-tcpip' !== $channel->getChannelType()) {
-                    return;
-                }
-
-                $fixture = $server ?? throw new \RuntimeException('Forward server fixture unavailable');
-
-                $connector->connect($fixture->getForwardTargetAddress())->then(function (TcpConnectionInterface $target) use ($channel, $fixture): void {
-                    $fixture->tcpConnections[] = $target;
-
-                    $target->on('data', static function (string $data) use ($channel): void {
-                        $channel->write($data);
-                    });
-                    $target->on('close', static function () use ($channel): void {
-                        $channel->close();
-                    });
-                    $channel->on('data', static function (string $data) use ($target): void {
-                        $target->write($data);
-                    });
-                    $channel->on('close', static function () use ($target): void {
-                        $target->close();
-                    });
-                }, static function (\Throwable $throwable) use ($channel): void {
-                    $channel->write('connect failed:' . $throwable->getMessage());
-                    $channel->close();
-                });
+            $connection->on('direct-tcpip', static function (array $info, Deferred $deferred): void {
+                $deferred->resolve(true);
             });
         });
+        $server->enableDirectTcpip();
 
         $server->forwardTargetServer = new TcpServer('127.0.0.1:0', $loop);
         $server->forwardTargetAddress = $server->forwardTargetServer->getAddress();
