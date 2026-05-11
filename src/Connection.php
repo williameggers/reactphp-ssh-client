@@ -37,7 +37,7 @@ final class Connection
     use EventEmitterTrait;
     use WritesLogs;
 
-    private string $clientVersion = 'SSH-2.0-ReactPHP-SSHClient_0.1';
+    private string $clientVersion = 'SSH-2.0-ReactPHP-SSHClient_' . Connector::VERSION;
     private ?string $serverVersion = null;
     private string $inputBuffer = '';
     private PacketHandler $packetHandler;

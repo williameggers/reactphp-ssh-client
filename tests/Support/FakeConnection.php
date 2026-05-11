@@ -92,6 +92,14 @@ final class FakeConnection implements ConnectionInterface
     }
 
     /**
+     * @return list<string>
+     */
+    public function writtenData(): array
+    {
+        return $this->writes;
+    }
+
+    /**
      * @return list<Packet>
      */
     public function writtenPackets(): array

@@ -49,7 +49,7 @@
         "phpstan/phpstan": "^2.1",
         "phpunit/phpunit": "^9.6 || ^7.5 || ^11.5",
         "rector/rector": "^2.1",
-        "williameggers/reactphp-ssh-server": "^1.0"
+        "williameggers/reactphp-ssh-server": "^1.1"
     },
     "config": {
         "allow-plugins": {

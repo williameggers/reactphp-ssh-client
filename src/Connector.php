@@ -12,6 +12,13 @@ use WilliamEggers\React\SSHClient\Loggers\NullLogger;
 final readonly class Connector
 {
     /**
+     * Current version of the ReactPHP SSH client library.
+     *
+     * This value is used in the client identification string during the SSH handshake.
+     */
+    public const VERSION = '1.0.0';
+
+    /**
      * Create a connector for opening SSH client sessions.
      *
      * @param null|LoggerInterface          $logger          optional logger for connection lifecycle events
