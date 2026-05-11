@@ -77,8 +77,18 @@ final class Connection
         $this->publicKeyHelper = new PublicKeyHelper();
         $this->kexNegotiator = new KexNegotiator($this->clientVersion, '');
         $this->connection->on('data', function (mixed $data): void {
-            if (is_string($data)) {
+            if (!is_string($data)) {
+                return;
+            }
+
+            try {
                 $this->handleData($data);
+            } catch (\Throwable $throwable) {
+                if ($this->rejectHandshake($throwable)) {
+                    return;
+                }
+
+                throw $throwable;
             }
         });
         $this->connection->on('error', function (\Throwable $throwable): void {
@@ -86,12 +96,17 @@ final class Connection
                 'exception' => $throwable::class,
                 'message' => $throwable->getMessage(),
             ]);
+
+            $this->rejectHandshake($throwable);
             $this->emit('error', [$throwable]);
         });
         $this->connection->on('close', function (): void {
             $this->info('SSH connection closed', [
                 'active_channels' => count($this->channels),
             ]);
+
+            $this->rejectHandshake(new ProtocolException('SSH connection closed during handshake'));
+
             foreach ($this->channels as $channel) {
                 $channel->receiveClose();
             }
@@ -118,11 +133,10 @@ final class Connection
         $socketPromise = null;
         $loop = Loop::get();
         $timer = null;
+        $timerActive = false;
 
         /** @var Deferred<Client> $deferred */
-        $deferred = new Deferred(static function () use (&$socketConnection, &$socketPromise, $loop, &$timer): void {
-            self::cancelConnectTimeoutTimer($loop, $timer);
-            $timer = null;
+        $deferred = new Deferred(static function () use (&$socketConnection, &$socketPromise): void {
             $socketConnection?->close();
 
             if (null !== $socketPromise) {
@@ -134,11 +148,11 @@ final class Connection
             'timeout' => $timeout,
         ]);
 
-        $timer = self::createConnectTimeoutTimer($uri, $timeout, $deferred, $loop, $socketConnection, $socketPromise, $connectionLogger);
+        $timer = self::createConnectTimeoutTimer($uri, $timeout, $deferred, $loop, $timer, $timerActive, $socketConnection, $socketPromise, $connectionLogger);
         $connector = $socketConnector ?? new SocketConnector(loop: $loop);
         $socketPromise = $connector->connect($uri);
         $socketPromise->then(
-            function (ConnectionInterface $connection) use ($authentication, $hostKeyVerifier, $deferred, $logger, $connectionLogger, $uri, $loop, &$timer, &$socketConnection): void {
+            function (ConnectionInterface $connection) use ($authentication, $hostKeyVerifier, $deferred, $logger, $connectionLogger, $uri, &$socketConnection): void {
                 $socketConnection = $connection;
                 $connectionLogger->info('TCP connection established', [
                     'uri' => $uri,
@@ -146,17 +160,13 @@ final class Connection
                 ]);
                 $clientConnection = new self($connection, $logger);
                 $clientConnection->start($authentication, $hostKeyVerifier)->then(
-                    static function (Client $client) use ($deferred, $connectionLogger, $uri, $loop, &$timer): void {
-                        self::cancelConnectTimeoutTimer($loop, $timer);
-                        $timer = null;
+                    static function (Client $client) use ($deferred, $connectionLogger, $uri): void {
                         $connectionLogger->info('SSH connection ready', [
                             'uri' => $uri,
                         ]);
                         $deferred->resolve($client);
                     },
-                    static function (\Throwable $throwable) use ($deferred, $connectionLogger, $uri, $loop, &$timer): void {
-                        self::cancelConnectTimeoutTimer($loop, $timer);
-                        $timer = null;
+                    static function (\Throwable $throwable) use ($deferred, $connectionLogger, $uri): void {
                         $connectionLogger->error('SSH connection failed during handshake', [
                             'uri' => $uri,
                             'exception' => $throwable::class,
@@ -166,15 +176,26 @@ final class Connection
                     }
                 );
             },
-            static function (\Throwable $throwable) use ($deferred, $connectionLogger, $uri, $loop, &$timer): void {
-                self::cancelConnectTimeoutTimer($loop, $timer);
-                $timer = null;
+            static function (\Throwable $throwable) use ($deferred, $connectionLogger, $uri): void {
                 $connectionLogger->error('TCP connection failed', [
                     'uri' => $uri,
                     'exception' => $throwable::class,
                     'message' => $throwable->getMessage(),
                 ]);
                 $deferred->reject($throwable);
+            }
+        );
+
+        $deferred->promise()->then(
+            static function () use ($loop, &$timer, &$timerActive): void {
+                self::cancelConnectTimeoutTimer($loop, $timer, $timerActive);
+                $timer = null;
+                $timerActive = false;
+            },
+            static function () use ($loop, &$timer, &$timerActive): void {
+                self::cancelConnectTimeoutTimer($loop, $timer, $timerActive);
+                $timer = null;
+                $timerActive = false;
             }
         );
 
@@ -385,6 +406,18 @@ final class Connection
         return $deferred->promise();
     }
 
+    private function rejectHandshake(\Throwable $throwable): bool
+    {
+        if (!$this->handshakeDeferred instanceof Deferred) {
+            return false;
+        }
+
+        $this->handshakeDeferred->reject($throwable);
+        $this->handshakeDeferred = null;
+
+        return true;
+    }
+
     /**
      * @param Deferred<Client>                           $deferred
      * @param null|PromiseInterface<ConnectionInterface> $socketPromise
@@ -394,6 +427,8 @@ final class Connection
         ?float $timeout,
         Deferred $deferred,
         LoopInterface $loop,
+        ?TimerInterface &$timer,
+        bool &$timerActive,
         ?ConnectionInterface &$socketConnection,
         ?PromiseInterface &$socketPromise,
         LoggerInterface $logger,
@@ -402,7 +437,12 @@ final class Connection
             return null;
         }
 
-        return $loop->addTimer($timeout, static function () use ($uri, $timeout, $deferred, &$socketConnection, &$socketPromise, $logger): void {
+        $timerActive = true;
+
+        return $loop->addTimer($timeout, static function () use ($uri, $timeout, $deferred, &$timer, &$timerActive, &$socketConnection, &$socketPromise, $logger): void {
+            $timer = null;
+            $timerActive = false;
+            $deferred->reject(new \RuntimeException(sprintf('SSH connection to %s timed out after %s seconds', $uri, self::formatTimeout($timeout))));
             $socketConnection?->close();
 
             if (null !== $socketPromise) {
@@ -413,14 +453,12 @@ final class Connection
                 'uri' => $uri,
                 'timeout' => $timeout,
             ]);
-
-            $deferred->reject(new \RuntimeException(sprintf('SSH connection to %s timed out after %s seconds', $uri, self::formatTimeout($timeout))));
         });
     }
 
-    private static function cancelConnectTimeoutTimer(LoopInterface $loop, ?TimerInterface $timer): void
+    private static function cancelConnectTimeoutTimer(LoopInterface $loop, ?TimerInterface $timer, bool $timerActive): void
     {
-        if (!$timer instanceof TimerInterface) {
+        if (!$timer instanceof TimerInterface || !$timerActive) {
             return;
         }
 
@@ -640,6 +678,7 @@ final class Connection
         ]);
         $client = new Client($this);
         $this->handshakeDeferred?->resolve($client);
+        $this->handshakeDeferred = null;
     }
 
     private function handlePublicKeyOk(): void

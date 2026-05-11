@@ -19,34 +19,15 @@ $term = getenv('SSH_TERM') ?: 'xterm-256color';
 $rows = (int) (getenv('SSH_ROWS') ?: '24');
 $cols = (int) (getenv('SSH_COLS') ?: '80');
 
-$restoreTerminal = static function (): void {};
-
-if (stream_isatty(STDIN)) {
-    $sttyMode = null;
-    exec('stty -g', $sttyOutput, $sttyExitCode);
-
-    if (0 === $sttyExitCode && isset($sttyOutput[0]) && '' !== $sttyOutput[0]) {
-        $sttyMode = $sttyOutput[0];
-        exec('stty raw -echo', result_code: $rawModeExitCode);
-
-        if (0 === $rawModeExitCode) {
-            $restoreTerminal = static function () use ($sttyMode): void {
-                exec('stty ' . escapeshellarg($sttyMode));
-            };
-            register_shutdown_function($restoreTerminal);
-        }
-    }
-}
-
 $connector = new Connector(timeout: 30.0);
 $connector->connect(
     sprintf('%s:%d', $host, $port),
     new PasswordAuthentication($username, $password),
     new CallbackHostKeyVerifier(static fn (): bool => true),
 )->then(
-    function (Client $client) use ($term, $rows, $cols, $restoreTerminal): void {
+    function (Client $client) use ($term, $rows, $cols): void {
         $client->shell(new ShellConfig($term, new WinSize($rows, $cols)))->then(
-            function (Shell $shell) use ($client, $restoreTerminal): void {
+            function (Shell $shell) use ($client): void {
                 fwrite(STDERR, "Interactive shell started. Press Ctrl-D to send EOF.\n");
 
                 stream_set_blocking(STDIN, false);
@@ -82,23 +63,20 @@ $connector->connect(
                     }
                 });
 
-                $shell->join()->then(static function (int $exitCode) use ($client, $restoreTerminal): void {
-                    $restoreTerminal();
+                $shell->join()->then(static function (int $exitCode) use ($client): void {
                     Loop::removeReadStream(STDIN);
                     fwrite(STDERR, sprintf("\nShell exited with code %d\n", $exitCode));
                     $client->close();
                     Loop::stop();
                 });
             },
-            static function (Throwable $throwable) use ($restoreTerminal): void {
-                $restoreTerminal();
+            static function (Throwable $throwable): void {
                 fwrite(STDERR, 'Failed to start shell: ' . $throwable->getMessage() . PHP_EOL);
                 Loop::stop();
             }
         );
     },
-    static function (Throwable $throwable) use ($restoreTerminal): void {
-        $restoreTerminal();
+    static function (Throwable $throwable): void {
         fwrite(STDERR, 'SSH connection failed: ' . $throwable->getMessage() . PHP_EOL);
         Loop::stop();
     }

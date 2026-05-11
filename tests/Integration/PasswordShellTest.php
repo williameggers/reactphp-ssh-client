@@ -9,6 +9,7 @@ use React\Socket\TcpServer;
 use WilliamEggers\React\SSHClient\Authentication\PasswordAuthentication;
 use WilliamEggers\React\SSHClient\Client;
 use WilliamEggers\React\SSHClient\Connector;
+use WilliamEggers\React\SSHClient\Exception\AuthenticationException;
 use WilliamEggers\React\SSHClient\HostKey\CallbackHostKeyVerifier;
 use WilliamEggers\Tests\React\SSHClient\Support\TestSshServer;
 
@@ -60,6 +61,37 @@ test('connect rejects when SSH handshake exceeds timeout', function (): void {
                 expect($throwable)->toBeInstanceOf(RuntimeException::class);
                 expect($throwable->getMessage())->toContain('timed out after 0.05 seconds');
                 $server->close();
+                Loop::stop();
+            }
+        );
+    });
+
+    Loop::run();
+});
+
+test('connect rejects when password authentication fails', function (): void {
+    $address = null;
+    TestSshServer::shellEchoServer()->then(static function (string $resolvedAddress) use (&$address): void {
+        $address = $resolvedAddress;
+    });
+
+    Loop::futureTick(function () use (&$address): void {
+        if (!is_string($address)) {
+            return;
+        }
+
+        $connector = new Connector();
+        $connector->connect(
+            $address,
+            new PasswordAuthentication('user', 'wrong-password'),
+            new CallbackHostKeyVerifier(static fn (): bool => true),
+        )->then(
+            static function (): void {
+                throw new RuntimeException('Expected password authentication failure');
+            },
+            static function (Throwable $throwable): void {
+                expect($throwable)->toBeInstanceOf(AuthenticationException::class);
+                expect($throwable->getMessage())->toBe('Password authentication failed');
                 Loop::stop();
             }
         );
