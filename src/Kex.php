@@ -2,8 +2,8 @@
 
 namespace WilliamEggers\React\SSHClient;
 
-use phpseclib3\Crypt\DH;
-use phpseclib3\Crypt\DH\PrivateKey;
+use phpseclib4\Crypt\DH;
+use phpseclib4\Crypt\DH\PrivateKey;
 
 final class Kex
 {
@@ -12,6 +12,7 @@ final class Kex
     private string $sharedSecret;
     private string $clientEphemeralPublic;
     private string $clientEphemeralPrivate;
+    private ?PrivateKey $dhPrivateKey = null;
     private ?Packet $replyPacket = null;
 
     public function __construct(
@@ -22,6 +23,9 @@ final class Kex
     public function createRequest(): string
     {
         $kexAlgorithm = $this->kexNegotiator->getNegotiatedAlgorithm('kex');
+        if (null === $kexAlgorithm) {
+            throw new \RuntimeException('No KEX algorithm negotiated');
+        }
 
         switch ($kexAlgorithm) {
             case 'curve25519-sha256':
@@ -33,13 +37,10 @@ final class Kex
                 return chr(30) . pack('N', strlen($this->clientEphemeralPublic)) . $this->clientEphemeralPublic;
 
             case 'diffie-hellman-group14-sha256':
-                $dhParameters = DH::createParameters($kexAlgorithm);
-                $dhPrivate = DH::createKey($dhParameters);
-                $dhPublic = $dhPrivate->getPublicKey()->toBigInteger()->toBytes(true);
-                $this->clientEphemeralPrivate = serialize($dhPrivate);
-                $this->clientEphemeralPublic = $dhPublic;
+                $this->dhPrivateKey = DH::createKey(DH::createParameters($kexAlgorithm));
+                $this->clientEphemeralPublic = $this->dhPrivateKey->getPublicKey()->toBigInteger()->toBytes(true);
 
-                return chr(30) . $this->packMpint($dhPublic);
+                return chr(30) . $this->packMpint($this->clientEphemeralPublic);
         }
 
         throw new \RuntimeException('Unhandled KEX algorithm');
@@ -63,8 +64,8 @@ final class Kex
                 break;
 
             case 'diffie-hellman-group14-sha256':
-                $dhPrivate = unserialize($this->clientEphemeralPrivate, ['allowed_classes' => true]);
-                if (!$dhPrivate instanceof PrivateKey) {
+                $dhPrivate = $this->dhPrivateKey;
+                if (null === $dhPrivate) {
                     throw new \RuntimeException('Invalid DH private key state');
                 }
 

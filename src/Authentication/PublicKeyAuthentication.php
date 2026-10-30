@@ -2,8 +2,8 @@
 
 namespace WilliamEggers\React\SSHClient\Authentication;
 
-use phpseclib3\Crypt\Common\PrivateKey;
-use phpseclib3\Crypt\PublicKeyLoader;
+use phpseclib4\Crypt\Common\PrivateKey;
+use phpseclib4\Crypt\PublicKeyLoader;
 
 final class PublicKeyAuthentication implements AuthenticationInterface
 {
@@ -23,7 +23,7 @@ final class PublicKeyAuthentication implements AuthenticationInterface
         string $privateKey,
         ?string $passphrase = null,
     ) {
-        $this->privateKey = PublicKeyLoader::loadPrivateKey($privateKey, $passphrase ?? '');
+        $this->privateKey = PublicKeyLoader::loadPrivateKey($privateKey, $passphrase);
     }
 
     /**

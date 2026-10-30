@@ -27,13 +27,19 @@
             "email": "william@eggers.id.au"
         }
     ],
+    "repositories": [
+        {
+            "type": "vcs",
+            "url": "https://github.com/murrant/reactphp-ssh-server"
+        }
+    ],
     "require": {
         "php": ">=8.2",
         "ext-mbstring": "*",
         "ext-openssl": "*",
         "ext-sodium": "*",
         "evenement/evenement": "^3.0 || ^2.0 || ^1.0",
-        "phpseclib/phpseclib": "^3.0",
+        "phpseclib/phpseclib": "^4.0",
         "psr/log": "^3.0",
         "react/event-loop": "^1.2",
         "react/promise": "^3.2",
@@ -49,7 +55,7 @@
         "phpstan/phpstan": "^2.1",
         "phpunit/phpunit": "^9.6 || ^7.5 || ^11.5",
         "rector/rector": "^2.1",
-        "williameggers/reactphp-ssh-server": "^1.1"
+        "williameggers/reactphp-ssh-server": "dev-phpseclib-4 as 2.0.0"
     },
     "config": {
         "allow-plugins": {
