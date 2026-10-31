@@ -16,7 +16,7 @@ final readonly class Connector
      *
      * This value is used in the client identification string during the SSH handshake.
      */
-    public const VERSION = '1.0.0';
+    public const VERSION = '2.0.0';
 
     /**
      * Create a connector for opening SSH client sessions.
