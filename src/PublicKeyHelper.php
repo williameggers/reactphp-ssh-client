@@ -2,14 +2,14 @@
 
 namespace WilliamEggers\React\SSHClient;
 
-use phpseclib3\Crypt\Common\PrivateKey;
-use phpseclib3\Crypt\Common\PublicKey;
-use phpseclib3\Crypt\EC;
-use phpseclib3\Crypt\EC\PrivateKey as EcPrivateKey;
-use phpseclib3\Crypt\PublicKeyLoader;
-use phpseclib3\Crypt\RSA;
-use phpseclib3\Crypt\RSA\PrivateKey as RsaPrivateKey;
-use phpseclib3\Math\BigInteger;
+use phpseclib4\Crypt\Common\PrivateKey;
+use phpseclib4\Crypt\Common\PublicKey;
+use phpseclib4\Crypt\EC;
+use phpseclib4\Crypt\EC\PrivateKey as EcPrivateKey;
+use phpseclib4\Crypt\PublicKeyLoader;
+use phpseclib4\Crypt\RSA;
+use phpseclib4\Crypt\RSA\PrivateKey as RsaPrivateKey;
+use phpseclib4\Math\BigInteger;
 
 final class PublicKeyHelper
 {
@@ -21,26 +21,16 @@ final class PublicKeyHelper
         $publicKey = $key instanceof PrivateKey ? $key->getPublicKey() : $key;
 
         if ($publicKey instanceof RSA) {
-            $blob = $publicKey->toString('OpenSSH', ['binary' => true]);
-            if (!is_string($blob)) {
-                throw new \UnexpectedValueException('Unexpected RSA OpenSSH export type');
-            }
-
             return [
                 'algorithm' => 'ssh-rsa',
-                'blob' => $blob,
+                'blob' => $publicKey->toString('OpenSSH', ['binary' => true]),
             ];
         }
 
         if ($publicKey instanceof EC && 'Ed25519' === $publicKey->getCurve()) {
-            $blob = $publicKey->toString('OpenSSH', ['binary' => true]);
-            if (!is_string($blob)) {
-                throw new \UnexpectedValueException('Unexpected Ed25519 OpenSSH export type');
-            }
-
             return [
                 'algorithm' => 'ssh-ed25519',
-                'blob' => $blob,
+                'blob' => $publicKey->toString('OpenSSH', ['binary' => true]),
             ];
         }
 
@@ -135,17 +125,12 @@ final class PublicKeyHelper
     {
         if ($privateKey instanceof RsaPrivateKey) {
             $algorithm = 'rsa-sha2-256';
-            $signatureKey = $privateKey->withPadding(RSA::SIGNATURE_PKCS1);
-            if (!$signatureKey instanceof RsaPrivateKey) {
-                throw new \UnexpectedValueException('Unexpected RSA key type after applying padding');
-            }
-
-            $signatureKey = $signatureKey->withHash('sha256');
-            if (!$signatureKey instanceof RsaPrivateKey) {
-                throw new \UnexpectedValueException('Unexpected RSA key type after applying hash');
-            }
+            $signatureKey = $privateKey->withPadding(RSA::SIGNATURE_PKCS1)->withHash('sha256');
 
             $signature = $signatureKey->sign($signedData);
+            if (!is_string($signature) || '' === $signature) {
+                throw new \UnexpectedValueException('Unexpected RSA signature type');
+            }
 
             return [
                 'algorithm' => $algorithm,
@@ -222,25 +207,10 @@ final class PublicKeyHelper
 
     private function createPemFromComponents(string $modulus, string $exponent): string
     {
-        $pem = PublicKeyLoader::load([
+        return PublicKeyLoader::load([
             'n' => new BigInteger($modulus, 256),
             'e' => new BigInteger($exponent, 256),
         ])->toString('PKCS8');
-
-        if (is_array($pem)) {
-            $parts = [];
-            foreach ($pem as $part) {
-                if (!is_string($part)) {
-                    throw new \UnexpectedValueException('Unexpected PEM export part');
-                }
-
-                $parts[] = $part;
-            }
-
-            return implode('', $parts);
-        }
-
-        return $pem;
     }
 
     private function extractEd25519PublicKey(string $keyBlob): string

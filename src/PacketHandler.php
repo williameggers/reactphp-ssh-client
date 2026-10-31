@@ -2,8 +2,8 @@
 
 namespace WilliamEggers\React\SSHClient;
 
-use phpseclib3\Crypt\AES;
-use phpseclib3\Crypt\Hash;
+use phpseclib4\Crypt\AES;
+use phpseclib4\Crypt\Hash;
 use React\Socket\ConnectionInterface;
 use WilliamEggers\React\SSHClient\Concerns\WritesLogs;
 use WilliamEggers\React\SSHClient\Enums\MessageType;
