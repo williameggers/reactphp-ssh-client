@@ -275,12 +275,15 @@ final class Connection
 
         /** @var Deferred<SessionChannel> $deferred */
         $deferred = new Deferred();
-        $this->pendingChannelOpens[$localChannel] = new Deferred(function () use ($localChannel): void {
+
+        /** @var Deferred<ChannelInterface> $openDeferred */
+        $openDeferred = new Deferred(function () use ($localChannel): void {
             unset($this->pendingChannelOpens[$localChannel], $this->pendingChannelTypes[$localChannel]);
         });
+        $this->pendingChannelOpens[$localChannel] = $openDeferred;
         $this->pendingChannelTypes[$localChannel] = 'session';
 
-        $this->pendingChannelOpens[$localChannel]->promise()->then(function (mixed $channel) use ($deferred): void {
+        $openDeferred->promise()->then(function (mixed $channel) use ($deferred): void {
             if (!$channel instanceof SessionChannel) {
                 $deferred->reject(new ProtocolException('Expected session channel open confirmation'));
 
@@ -322,12 +325,15 @@ final class Connection
 
         /** @var Deferred<DirectTcpipChannel> $deferred */
         $deferred = new Deferred();
-        $this->pendingChannelOpens[$localChannel] = new Deferred(function () use ($localChannel): void {
+
+        /** @var Deferred<ChannelInterface> $openDeferred */
+        $openDeferred = new Deferred(function () use ($localChannel): void {
             unset($this->pendingChannelOpens[$localChannel], $this->pendingChannelTypes[$localChannel]);
         });
+        $this->pendingChannelOpens[$localChannel] = $openDeferred;
         $this->pendingChannelTypes[$localChannel] = 'direct-tcpip';
 
-        $this->pendingChannelOpens[$localChannel]->promise()->then(function (mixed $channel) use ($deferred): void {
+        $openDeferred->promise()->then(function (mixed $channel) use ($deferred): void {
             if (!$channel instanceof DirectTcpipChannel) {
                 $deferred->reject(new ProtocolException('Expected direct-tcpip channel open confirmation'));
 
